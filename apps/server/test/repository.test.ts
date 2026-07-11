@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { parseConfig } from "../src/config.js";
 import { runMigrations } from "../src/db/migrate.js";
 import { openDatabase } from "../src/db/database.js";
@@ -15,11 +18,17 @@ function sha256(input: string): string {
 let db: Database.Database;
 let repo: Repository;
 let cleanup: (() => void) | undefined;
+let tmpDir: string;
 
 beforeAll(() => {
-  const result = openDatabase(":memory:");
+  tmpDir = mkdtempSync(join(tmpdir(), "repo-test-"));
+  const dbPath = join(tmpDir, "test.db");
+  const result = openDatabase(dbPath);
   db = result.db;
-  cleanup = result.close;
+  cleanup = () => {
+    result.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  };
   runMigrations(db);
   repo = createRepository(db);
 });
@@ -72,10 +81,8 @@ describe("migrations pragmas", () => {
   });
 
   it("enables WAL journal mode", () => {
-    // WAL is not supported for :memory: databases; on disk it will be "wal"
     const row = db.pragma("journal_mode") as Array<{ journal_mode: string }>;
-    // For in-memory DBs, journal_mode stays "memory" which is equivalent
-    expect(["wal", "memory"]).toContain(row[0]!.journal_mode);
+    expect(row[0]!.journal_mode).toBe("wal");
   });
 });
 
