@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "messageId": "   ",
+  "type": "hello",
+  "sentAt": "2025-07-11T12:00:00.000Z",
+  "payload": {
+    "clientId": "client-opencode-001",
+    "sessionId": "session-abc123"
+  }
+}

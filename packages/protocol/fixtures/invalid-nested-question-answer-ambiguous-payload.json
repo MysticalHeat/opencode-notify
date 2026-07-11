@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "messageId": "srv-0102-cccc-dddd-eeee",
+  "type": "decision",
+  "sentAt": "2025-07-11T12:04:00.000Z",
+  "payload": {
+    "requestId": "req-001",
+    "clientId": "client-opencode-001",
+    "sessionId": "session-abc123",
+    "answers": [
+      { "value": "opt-configs", "label": "Publish configs for all services" }
+    ],
+    "approved": true
+  }
+}

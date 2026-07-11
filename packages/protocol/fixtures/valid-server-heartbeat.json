@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "messageId": "srv-0002-bbbb-cccc-dddd",
+  "type": "heartbeat",
+  "sentAt": "2025-07-11T12:00:30.100Z",
+  "payload": {
+    "clientId": "client-opencode-001",
+    "sessionId": "session-abc123"
+  }
+}

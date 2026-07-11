@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "messageId": "srv-0004-dddd-eeee-ffff",
+  "type": "decision",
+  "sentAt": "2025-07-11T12:04:01.000Z",
+  "payload": {
+    "requestId": "req-002",
+    "clientId": "client-opencode-001",
+    "sessionId": "session-abc123",
+    "approved": true
+  }
+}

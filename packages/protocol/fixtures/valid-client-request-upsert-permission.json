@@ -1,0 +1,17 @@
+{
+  "protocolVersion": 1,
+  "messageId": "msg-0005-eeee-ffff-0001",
+  "type": "request_upsert",
+  "sentAt": "2025-07-11T12:02:00.000Z",
+  "payload": {
+    "clientId": "client-opencode-001",
+    "sessionId": "session-abc123",
+    "requestId": "req-002",
+    "expiresAt": "2025-07-11T12:07:00.000Z",
+    "permission": {
+      "action": "read",
+      "patterns": ["**/*.ts", "**/*.json"],
+      "display": "Read project source files"
+    }
+  }
+}

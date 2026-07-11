@@ -1,0 +1,21 @@
+{
+  "protocolVersion": 1,
+  "messageId": "msg-0004-dddd-eeee-ffff",
+  "type": "request_upsert",
+  "sentAt": "2025-07-11T12:01:00.000Z",
+  "payload": {
+    "clientId": "client-opencode-001",
+    "sessionId": "session-abc123",
+    "requestId": "req-001",
+    "expiresAt": "2025-07-11T12:06:00.000Z",
+    "question": {
+      "text": "Which file should I edit?",
+      "options": [
+        { "label": "Publish configs for all services", "value": "opt-configs" },
+        { "label": "Skip this step", "value": "opt-skip" },
+        { "label": "Something else", "value": "opt-other" }
+      ],
+      "multiSelect": false
+    }
+  }
+}

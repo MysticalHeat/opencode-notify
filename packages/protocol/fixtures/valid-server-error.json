@@ -1,0 +1,11 @@
+{
+  "protocolVersion": 1,
+  "messageId": "srv-0006-ffff-0001-0002",
+  "type": "error",
+  "sentAt": "2025-07-11T12:06:00.000Z",
+  "payload": {
+    "code": "REQUEST_EXPIRED",
+    "message": "The request has expired",
+    "requestId": "req-001"
+  }
+}

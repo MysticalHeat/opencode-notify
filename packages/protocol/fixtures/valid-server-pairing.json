@@ -1,0 +1,11 @@
+{
+  "protocolVersion": 1,
+  "messageId": "srv-0001-aaaa-bbbb-cccc",
+  "type": "pairing",
+  "sentAt": "2025-07-11T12:00:02.000Z",
+  "payload": {
+    "clientId": "client-opencode-001",
+    "sessionId": "session-abc123",
+    "paired": true
+  }
+}
