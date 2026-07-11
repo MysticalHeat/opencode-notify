@@ -19,6 +19,16 @@ export interface PairingRow {
   expiresAt: string;
 }
 
+export interface PairingCodeRow {
+  id: string;
+  code: string;
+  consumed: number;
+  consumedByClientId: string | null;
+  consumedAt: string | null;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export type RequestStatus =
   | "pending"
   | "decided"
@@ -111,6 +121,16 @@ export interface Repository {
   dequeuePending(limit: number): OutboxRow[];
   markSent(id: string): void;
   markFailed(id: string): void;
+
+  // pairing codes (one-time, short-lived)
+  createPairingCode(code: string, expiresAt: Date): PairingCodeRow;
+  findPairingCodeByCode(code: string): PairingCodeRow | undefined;
+  consumePairingCode(code: string, clientId: string): boolean;
+  expirePairingCodes(): number;
+
+  // client management
+  deleteClient(clientId: string): boolean;
+  listAllClients(): ClientRow[];
 }
 
 export interface UpsertRequestParams {
@@ -186,6 +206,18 @@ function mapTelegram(row: Record<string, unknown>): TelegramUpdateRow {
     updateId: row.update_id as number,
     payloadJson: row.payload_json as string,
     processedAt: row.processed_at as string,
+  };
+}
+
+function mapPairingCode(row: Record<string, unknown>): PairingCodeRow {
+  return {
+    id: row.id as string,
+    code: row.code as string,
+    consumed: row.consumed as number,
+    consumedByClientId: row.consumed_by_client_id as string | null,
+    consumedAt: row.consumed_at as string | null,
+    createdAt: row.created_at as string,
+    expiresAt: row.expires_at as string,
   };
 }
 
@@ -325,6 +357,39 @@ export function createRepository(db: Database.Database): Repository {
 
   const markFailedStmt = db.prepare(`
     UPDATE outbox SET status = 'failed', sent_at = datetime('now') WHERE id = ?
+  `);
+
+  // ── Pairing Codes ─────────────────────────────────────
+
+  const createPairingCodeStmt = db.prepare(`
+    INSERT INTO pairing_codes (id, code, created_at, expires_at)
+    VALUES (?, ?, datetime('now'), ?)
+  `);
+
+  const findPairingCodeByCodeStmt = db.prepare(`
+    SELECT * FROM pairing_codes WHERE code = ?
+  `);
+
+  const consumePairingCodeStmt = db.prepare(`
+    UPDATE pairing_codes
+    SET consumed = 1,
+        consumed_by_client_id = ?,
+        consumed_at = datetime('now')
+    WHERE code = ?
+      AND consumed = 0
+      AND datetime(expires_at) > datetime('now')
+  `);
+
+  const expirePairingCodesStmt = db.prepare(`
+    DELETE FROM pairing_codes WHERE datetime(expires_at) <= datetime('now')
+  `);
+
+  const deleteClientStmt = db.prepare(`
+    DELETE FROM clients WHERE id = ?
+  `);
+
+  const listAllClientsStmt = db.prepare(`
+    SELECT * FROM clients ORDER BY created_at ASC
   `);
 
   // ── Public API ───────────────────────────────────────
@@ -525,6 +590,56 @@ export function createRepository(db: Database.Database): Repository {
       db.transaction(() => {
         markFailedStmt.run(id);
       })();
+    },
+
+    // ── Pairing Codes ─────────────────────────────────
+
+    createPairingCode(code: string, expiresAt: Date): PairingCodeRow {
+      const id = randomUUID();
+      const expiresStr = toIso(expiresAt);
+      return db.transaction(() => {
+        createPairingCodeStmt.run(id, code, expiresStr);
+        return mapPairingCode(
+          db
+            .prepare("SELECT * FROM pairing_codes WHERE id = ?")
+            .get(id) as Record<string, unknown>,
+        );
+      })();
+    },
+
+    findPairingCodeByCode(code: string): PairingCodeRow | undefined {
+      const row = findPairingCodeByCodeStmt.get(code) as
+        | Record<string, unknown>
+        | undefined;
+      return row ? mapPairingCode(row) : undefined;
+    },
+
+    consumePairingCode(code: string, clientId: string): boolean {
+      return db.transaction(() => {
+        const info = consumePairingCodeStmt.run(clientId, code);
+        return info.changes > 0;
+      })();
+    },
+
+    expirePairingCodes(): number {
+      return db.transaction(() => {
+        const info = expirePairingCodesStmt.run();
+        return info.changes;
+      })();
+    },
+
+    // ── Client Management ──────────────────────────────
+
+    deleteClient(clientId: string): boolean {
+      return db.transaction(() => {
+        const info = deleteClientStmt.run(clientId);
+        return info.changes > 0;
+      })();
+    },
+
+    listAllClients(): ClientRow[] {
+      const rows = listAllClientsStmt.all() as Array<Record<string, unknown>>;
+      return rows.map(mapClient);
     },
   };
 }

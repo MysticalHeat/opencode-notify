@@ -8,7 +8,7 @@ const __dirname = dirname(__filename);
 
 const MIGRATIONS_DIR = join(__dirname, "..", "..", "migrations");
 
-const MIGRATION_FILES = ["001-initial.sql"] as const;
+const MIGRATION_FILES = ["001-initial.sql", "002-pairing-codes.sql"] as const;
 
 export function runMigrations(db: Database.Database): void {
   for (const file of MIGRATION_FILES) {
