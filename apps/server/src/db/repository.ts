@@ -135,6 +135,9 @@ export interface Repository {
 
   // pairing code cleanup
   unconsumePairingCode(code: string): boolean;
+
+  // atomic compensation: delete client + unconsume pairing code in one transaction
+  compensateCallbackFailure(clientId: string, code: string): boolean;
 }
 
 export interface UpsertRequestParams {
@@ -673,6 +676,14 @@ export function createRepository(db: Database.Database): Repository {
       return db.transaction(() => {
         const info = unconsumePairingCodeStmt.run(code);
         return info.changes > 0;
+      })();
+    },
+
+    compensateCallbackFailure(clientId: string, code: string): boolean {
+      return db.transaction(() => {
+        const delInfo = deleteClientStmt.run(clientId);
+        const uncInfo = unconsumePairingCodeStmt.run(code);
+        return delInfo.changes > 0 || uncInfo.changes > 0;
       })();
     },
   };

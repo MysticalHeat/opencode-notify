@@ -44,6 +44,7 @@ beforeEach(() => {
     DELETE FROM telegram_updates;
     DELETE FROM request_answers;
     DELETE FROM requests;
+    DELETE FROM pairing_codes;
     DELETE FROM pairings;
     DELETE FROM clients;
   `);
@@ -637,5 +638,90 @@ describe("foreign key enforcement", () => {
 
     const answers = repo.findAnswers(req.id);
     expect(answers).toEqual([]);
+  });
+});
+
+// ─── CALLBACK FAILURE COMPENSATION ──────────────────────────
+
+describe("callback failure compensation", () => {
+  it("atomically deletes client and unconsumes pairing code", () => {
+    // Create a pairing code
+    const expiresAt = new Date(Date.now() + 60_000);
+    const pc = repo.createPairingCode("COMP-CODE", expiresAt);
+    expect(pc.consumed).toBe(0);
+
+    // Create a client
+    const client = repo.createClient("comp-token");
+    const clientId = client.id;
+
+    // Simulate the state after CAS: code consumed and client created
+    const consumed = repo.consumePairingCode("COMP-CODE", clientId);
+    expect(consumed).toBe(true);
+
+    // Verify pre-conditions
+    const beforePc = repo.findPairingCodeByCode("COMP-CODE");
+    expect(beforePc!.consumed).toBe(1);
+    expect(beforePc!.consumedByClientId).toBe(clientId);
+    const beforeClients = repo.listAllClients();
+    expect(beforeClients.length).toBe(1);
+
+    // Call the atomic compensation
+    const result = repo.compensateCallbackFailure(clientId, "COMP-CODE");
+    expect(result).toBe(true);
+
+    // Assert client is removed
+    const afterClients = repo.listAllClients();
+    expect(afterClients.length).toBe(0);
+
+    // Assert pairing code is restored to retryable state
+    const afterPc = repo.findPairingCodeByCode("COMP-CODE");
+    expect(afterPc).toBeDefined();
+    expect(afterPc!.consumed).toBe(0);
+    expect(afterPc!.consumedByClientId).toBeNull();
+    expect(afterPc!.consumedAt).toBeNull();
+
+    // Verify the pairing code can actually be consumed again (retryable)
+    const secondClient = repo.createClient("comp-retry-token");
+    const reConsumed = repo.consumePairingCode("COMP-CODE", secondClient.id);
+    expect(reConsumed).toBe(true);
+  });
+
+  it("returns true even when only the pairing code needs un-consuming (client already gone)", () => {
+    const expiresAt = new Date(Date.now() + 60_000);
+    const pc = repo.createPairingCode("COMP-CODE-2", expiresAt);
+    const client = repo.createClient("comp-token-2");
+    repo.consumePairingCode("COMP-CODE-2", client.id);
+
+    // Manually delete the client first
+    repo.deleteClient(client.id);
+
+    // Compensation should still work on the pairing code side
+    const result = repo.compensateCallbackFailure(client.id, "COMP-CODE-2");
+    expect(result).toBe(true);
+
+    const afterPc = repo.findPairingCodeByCode("COMP-CODE-2");
+    expect(afterPc!.consumed).toBe(0);
+  });
+
+  it("returns true when only the client needs deletion (code already unconsumed)", () => {
+    const expiresAt = new Date(Date.now() + 60_000);
+    repo.createPairingCode("COMP-CODE-3", expiresAt);
+    const client = repo.createClient("comp-token-3");
+    repo.consumePairingCode("COMP-CODE-3", client.id);
+
+    // Manually unconsume the code first
+    repo.unconsumePairingCode("COMP-CODE-3");
+
+    // Compensation should still delete the client
+    const result = repo.compensateCallbackFailure(client.id, "COMP-CODE-3");
+    expect(result).toBe(true);
+
+    const afterClients = repo.listAllClients();
+    expect(afterClients.length).toBe(0);
+  });
+
+  it("returns false when nothing to compensate (neither exists)", () => {
+    const result = repo.compensateCallbackFailure("nonexistent-client", "NONEXISTENT");
+    expect(result).toBe(false);
   });
 });

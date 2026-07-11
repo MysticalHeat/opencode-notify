@@ -160,10 +160,8 @@ export function createPairingService(
       } catch (callbackErr) {
         const cbMsg =
           callbackErr instanceof Error ? callbackErr.message : String(callbackErr);
-        // Compensating cleanup: remove the client we just created
-        repo.deleteClient(clientId);
-        // Reset the pairing code so the user can retry
-        repo.unconsumePairingCode(code);
+        // Atomic compensating cleanup: remove the client and unconsume the code
+        repo.compensateCallbackFailure(clientId, code);
         return { success: false, error: `callback failed: ${cbMsg}` };
       }
 
