@@ -520,6 +520,188 @@ describe("expiry prevents dispatch", () => {
   });
 });
 
+// ─── REJECTION: MISMATCHED REQUEST ID ──────────────────
+
+describe("rejection: mismatched requestId", () => {
+  it("rejects UPSERT with different requestId from pending", () => {
+    const result = transitionRequest(pending(), {
+      type: "UPSERT",
+      requestId: "req-other",
+      clientId: "client-1",
+      sessionId: "session-1",
+      expiresAt,
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects CANCEL with different requestId from pending", () => {
+    const result = transitionRequest(pending(), {
+      type: "CANCEL",
+      requestId: "req-other",
+      clientId: "client-1",
+      sessionId: "session-1",
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects DECISION with different requestId from pending", () => {
+    const result = transitionRequest(pending(), {
+      type: "DECISION",
+      requestId: "req-other",
+      clientId: "client-1",
+      sessionId: "session-1",
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects DISPATCH with different requestId from decided", () => {
+    const result = transitionRequest(pending({ status: "decided" }), {
+      type: "DISPATCH",
+      requestId: "req-other",
+      clientId: "client-1",
+      sessionId: "session-1",
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects CANCEL with different requestId from decided", () => {
+    const result = transitionRequest(pending({ status: "decided" }), {
+      type: "CANCEL",
+      requestId: "req-other",
+      clientId: "client-1",
+      sessionId: "session-1",
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects APPLY_RESULT with different requestId from dispatching", () => {
+    const result = transitionRequest(pending({ status: "dispatching" }), {
+      type: "APPLY_RESULT",
+      requestId: "req-other",
+      clientId: "client-1",
+      sessionId: "session-1",
+      success: true,
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects ERROR with different requestId from dispatching", () => {
+    const result = transitionRequest(pending({ status: "dispatching" }), {
+      type: "ERROR",
+      requestId: "req-other",
+      clientId: "client-1",
+      sessionId: "session-1",
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+});
+
+// ─── REJECTION: MISMATCHED SESSION ID ─────────────────
+
+describe("rejection: mismatched sessionId", () => {
+  it("rejects UPSERT with different sessionId from pending", () => {
+    const result = transitionRequest(pending(), {
+      type: "UPSERT",
+      requestId: "req-1",
+      clientId: "client-1",
+      sessionId: "session-other",
+      expiresAt,
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects CANCEL with different sessionId from pending", () => {
+    const result = transitionRequest(pending(), {
+      type: "CANCEL",
+      requestId: "req-1",
+      clientId: "client-1",
+      sessionId: "session-other",
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects DECISION with different sessionId from pending", () => {
+    const result = transitionRequest(pending(), {
+      type: "DECISION",
+      requestId: "req-1",
+      clientId: "client-1",
+      sessionId: "session-other",
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects DISPATCH with different sessionId from decided", () => {
+    const result = transitionRequest(pending({ status: "decided" }), {
+      type: "DISPATCH",
+      requestId: "req-1",
+      clientId: "client-1",
+      sessionId: "session-other",
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects CANCEL with different sessionId from decided", () => {
+    const result = transitionRequest(pending({ status: "decided" }), {
+      type: "CANCEL",
+      requestId: "req-1",
+      clientId: "client-1",
+      sessionId: "session-other",
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects APPLY_RESULT with different sessionId from dispatching", () => {
+    const result = transitionRequest(pending({ status: "dispatching" }), {
+      type: "APPLY_RESULT",
+      requestId: "req-1",
+      clientId: "client-1",
+      sessionId: "session-other",
+      success: true,
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects ERROR with different sessionId from dispatching", () => {
+    const result = transitionRequest(pending({ status: "dispatching" }), {
+      type: "ERROR",
+      requestId: "req-1",
+      clientId: "client-1",
+      sessionId: "session-other",
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+});
+
+// ─── REJECTION: MISMATCHED CLIENT (COMPLETE) ──────────
+
+describe("rejection: mismatched client — ERROR from dispatching", () => {
+  it("rejects ERROR with different clientId from dispatching", () => {
+    const result = transitionRequest(pending({ status: "dispatching" }), {
+      type: "ERROR",
+      requestId: "req-1",
+      clientId: "client-other",
+      sessionId: "session-1",
+    }, baseTime);
+    expect(result).toBeUndefined();
+  });
+});
+
+// ─── DECISION WITH approved: true ─────────────────────
+
+describe("decision with approved: true", () => {
+  it("DECISION with approved:true transitions to decided", () => {
+    const result = transitionRequest(pending(), {
+      type: "DECISION",
+      requestId: "req-1",
+      clientId: "client-1",
+      sessionId: "session-1",
+      approved: true,
+    }, baseTime);
+    expect(result).toBeDefined();
+    expect(result!.status).toBe("decided");
+  });
+});
+
 // ─── REQUEST IDENTITY PRESERVATION ─────────────────────
 
 describe("request identity preservation", () => {
