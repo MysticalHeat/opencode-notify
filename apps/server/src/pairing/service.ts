@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { Repository, ClientRow } from "../db/repository.js";
 
 // ─── Types ──────────────────────────────────────────────
@@ -54,7 +54,15 @@ function createRateLimiter() {
     return true;
   }
 
-  return { isAllowed };
+  /** Refund one count so successful operations don't consume the budget. */
+  function refund(userId: number): void {
+    const entry = store.get(userId);
+    if (entry && entry.count > 0) {
+      entry.count--;
+    }
+  }
+
+  return { isAllowed, refund };
 }
 
 // ─── Helpers ────────────────────────────────────────────
@@ -131,19 +139,36 @@ export function createPairingService(
         return { success: false, error: "pairing code already consumed" };
       }
 
-      // Generate client token and create client
+      // Pre-generate client identity and token
+      const clientId = randomUUID();
       const token = generateClientToken();
-      const client = repo.createClient(token);
 
-      // Atomically consume the pairing code
-      const consumed = repo.consumePairingCode(code, client.id);
+      // Atomically consume the pairing code (CAS)
+      const consumed = repo.consumePairingCode(code, clientId);
       if (!consumed) {
-        // Race condition: someone else consumed it between check and now
+        // Race condition: someone else consumed it between check and now.
+        // No client was created yet, so no orphan to clean up.
         return { success: false, error: "pairing code already consumed" };
       }
 
-      // Hand off token via callback (never persisted or sent to Telegram)
-      await onTokenGenerated(token, client);
+      // Create the client now that CAS succeeded
+      const client = repo.createClientWithId(clientId, token);
+
+      // Hand off token via callback — with compensating cleanup on failure
+      try {
+        await onTokenGenerated(token, client);
+      } catch (callbackErr) {
+        const cbMsg =
+          callbackErr instanceof Error ? callbackErr.message : String(callbackErr);
+        // Compensating cleanup: remove the client we just created
+        repo.deleteClient(clientId);
+        // Reset the pairing code so the user can retry
+        repo.unconsumePairingCode(code);
+        return { success: false, error: `callback failed: ${cbMsg}` };
+      }
+
+      // Successful pairing: refund rate limit budget
+      rateLimiter.refund(telegramUserId);
 
       return { success: true, clientId: client.id };
     },

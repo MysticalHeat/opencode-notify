@@ -129,8 +129,12 @@ export interface Repository {
   expirePairingCodes(): number;
 
   // client management
+  createClientWithId(id: string, token: string): ClientRow;
   deleteClient(clientId: string): boolean;
   listAllClients(): ClientRow[];
+
+  // pairing code cleanup
+  unconsumePairingCode(code: string): boolean;
 }
 
 export interface UpsertRequestParams {
@@ -392,6 +396,14 @@ export function createRepository(db: Database.Database): Repository {
     SELECT * FROM clients ORDER BY created_at ASC
   `);
 
+  const unconsumePairingCodeStmt = db.prepare(`
+    UPDATE pairing_codes
+    SET consumed = 0,
+        consumed_by_client_id = NULL,
+        consumed_at = NULL
+    WHERE code = ?
+  `);
+
   // ── Public API ───────────────────────────────────────
 
   return {
@@ -630,6 +642,19 @@ export function createRepository(db: Database.Database): Repository {
 
     // ── Client Management ──────────────────────────────
 
+    createClientWithId(id: string, token: string): ClientRow {
+      const tokenHash = hashToken(token);
+      return db.transaction(() => {
+        createClientStmt.run(id, tokenHash);
+        return mapClient(
+          db.prepare("SELECT * FROM clients WHERE id = ?").get(id) as Record<
+            string,
+            unknown
+          >,
+        );
+      })();
+    },
+
     deleteClient(clientId: string): boolean {
       return db.transaction(() => {
         const info = deleteClientStmt.run(clientId);
@@ -640,6 +665,15 @@ export function createRepository(db: Database.Database): Repository {
     listAllClients(): ClientRow[] {
       const rows = listAllClientsStmt.all() as Array<Record<string, unknown>>;
       return rows.map(mapClient);
+    },
+
+    // ── Pairing Code Cleanup ───────────────────────────
+
+    unconsumePairingCode(code: string): boolean {
+      return db.transaction(() => {
+        const info = unconsumePairingCodeStmt.run(code);
+        return info.changes > 0;
+      })();
     },
   };
 }

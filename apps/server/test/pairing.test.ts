@@ -362,22 +362,19 @@ describe("rate limiting", () => {
     expect(results.every(Boolean)).toBe(true);
   });
 
-  it("rejects the 6th confirmation attempt within the same window", async () => {
-    // Generate 6 codes
-    const codes = Array.from({ length: 6 }, () =>
-      pairingService.generatePairingCode(60_000),
-    );
-
+  it("rejects the 6th confirmation attempt with invalid codes within the same window", async () => {
+    // Use invalid codes — failures should count toward rate limit
     for (let i = 0; i < 5; i++) {
-      await pairingService.confirmPairingCode(
-        codes[i]!.code,
+      const result = await pairingService.confirmPairingCode(
+        "WRONG-CODE",
         AUTHORIZED_USER_ID,
         async () => {},
       );
+      expect(result.success).toBe(false);
     }
 
     const result6 = await pairingService.confirmPairingCode(
-      codes[5]!.code,
+      "WRONG-CODE",
       AUTHORIZED_USER_ID,
       async () => {},
     );
@@ -391,6 +388,175 @@ describe("rate limiting", () => {
       pairingService.generatePairingCode(60_000),
     );
     expect(codes).toHaveLength(10);
+  });
+
+  it("successful pairings do not count toward rate limit budget", async () => {
+    // Generate 7 codes — all valid, should all succeed without rate limiting
+    const codes = Array.from({ length: 7 }, () =>
+      pairingService.generatePairingCode(60_000),
+    );
+
+    const results: boolean[] = [];
+    for (const { code } of codes) {
+      const result = await pairingService.confirmPairingCode(
+        code,
+        AUTHORIZED_USER_ID,
+        async () => {},
+      );
+      results.push(result.success);
+    }
+
+    expect(results.length).toBe(7);
+    expect(results.every(Boolean)).toBe(true);
+  });
+
+  it("rate limits repeated invalid code guesses", async () => {
+    // Use the same invalid code for each attempt to trigger rate limit
+    for (let i = 0; i < 5; i++) {
+      const result = await pairingService.confirmPairingCode(
+        "WRONG-CODE",
+        AUTHORIZED_USER_ID,
+        async () => {},
+      );
+      expect(result.success).toBe(false);
+      if (i < 4) {
+        expect(result.error).toMatch(/invalid|not found/i);
+      }
+    }
+
+    // 6th attempt should be rate-limited
+    const result6 = await pairingService.confirmPairingCode(
+      "WRONG-CODE",
+      AUTHORIZED_USER_ID,
+      async () => {},
+    );
+    expect(result6.success).toBe(false);
+    expect(result6.error).toMatch(/rate limit|too many/i);
+  });
+
+  it("successful pairing after 4 invalid guesses does not get rate-limited", async () => {
+    // 4 invalid guesses consume budget but don't overflow
+    for (let i = 0; i < 4; i++) {
+      await pairingService.confirmPairingCode(
+        "WRONG-CODE",
+        AUTHORIZED_USER_ID,
+        async () => {},
+      );
+    }
+
+    // 5th attempt with a valid code should succeed (budget: 4 failures + 1 success = still within limit)
+    const { code } = pairingService.generatePairingCode(60_000);
+    const result = await pairingService.confirmPairingCode(
+      code,
+      AUTHORIZED_USER_ID,
+      async () => {},
+    );
+    expect(result.success).toBe(true);
+  });
+});
+
+// ─── CALLBACK FAILURE & CAS CONSUME RESILIENCE ─────────────
+
+describe("callback failure and CAS consume resilience", () => {
+  it("CAS consume failure does not leave an orphaned client record", async () => {
+    const { code } = pairingService.generatePairingCode(60_000);
+
+    // Consume the code directly via repo to simulate a race
+    const otherClient = repo.createClient("racer-token");
+    const consumed = repo.consumePairingCode(code, otherClient.id);
+    expect(consumed).toBe(true);
+
+    // Now try to confirm — CAS should fail
+    let callbackCalled = false;
+    const result = await pairingService.confirmPairingCode(
+      code,
+      AUTHORIZED_USER_ID,
+      async (_token, _client) => {
+        callbackCalled = true;
+      },
+    );
+
+    expect(result.success).toBe(false);
+    expect(callbackCalled).toBe(false);
+
+    // No extra client records should have been added beyond the racer
+    const clients = repo.listAllClients();
+    expect(clients.length).toBe(1);
+    expect(clients[0]!.id).toBe(otherClient.id);
+  });
+
+  it("callback failure cleans up client and resets pairing code", async () => {
+    const { code } = pairingService.generatePairingCode(60_000);
+
+    let callbackCalled = false;
+    const result = await pairingService.confirmPairingCode(
+      code,
+      AUTHORIZED_USER_ID,
+      async (_token, _client) => {
+        callbackCalled = true;
+        throw new Error("callback delivery failed");
+      },
+    );
+
+    expect(result.success).toBe(false);
+    expect(callbackCalled).toBe(true);
+    expect(result.error).toMatch(/callback|failed/i);
+
+    // Client should have been cleaned up
+    const clients = repo.listAllClients();
+    expect(clients.length).toBe(0);
+
+    // Pairing code should be unconsumed (available for retry)
+    const pc = repo.findPairingCodeByCode(code);
+    expect(pc).toBeDefined();
+    expect(pc!.consumed).toBe(0);
+  });
+
+  it("after callback failure, same pairing code can be retried successfully", async () => {
+    const { code } = pairingService.generatePairingCode(60_000);
+
+    // First attempt: callback fails
+    const result1 = await pairingService.confirmPairingCode(
+      code,
+      AUTHORIZED_USER_ID,
+      async (_token, _client) => {
+        throw new Error("callback delivery failed");
+      },
+    );
+    expect(result1.success).toBe(false);
+
+    // Second attempt: callback succeeds with same code
+    let receivedToken: string | undefined;
+    const result2 = await pairingService.confirmPairingCode(
+      code,
+      AUTHORIZED_USER_ID,
+      async (token, _client) => {
+        receivedToken = token;
+      },
+    );
+    expect(result2.success).toBe(true);
+    expect(receivedToken).toBeDefined();
+
+    // Should have exactly 1 client now (first was cleaned up)
+    const clients = repo.listAllClients();
+    expect(clients.length).toBe(1);
+  });
+
+  it("plaintext token is never exposed in error response on callback failure", async () => {
+    const { code } = pairingService.generatePairingCode(60_000);
+
+    const result = await pairingService.confirmPairingCode(
+      code,
+      AUTHORIZED_USER_ID,
+      async (_token, _client) => {
+        throw new Error("callback delivery failed");
+      },
+    );
+    expect(result.success).toBe(false);
+    // Error message must not contain any token-like strings
+    expect(JSON.stringify(result)).not.toMatch(
+      /[A-Za-z0-9_-]{32,}/,
+    );
   });
 });
 
