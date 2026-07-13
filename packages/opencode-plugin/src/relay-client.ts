@@ -1,0 +1,324 @@
+import { randomBytes } from "node:crypto"
+import { parseServerMessage } from "@repo/protocol"
+import type { ServerMessage, DecisionMessage } from "@repo/protocol"
+import type { UpsertEvent, CancelEvent } from "./events.js"
+import {
+	buildUpsertMessage,
+	buildCancelMessage,
+} from "./events.js"
+
+export type RelayDecisionCallback = (decision: DecisionMessage) => void
+export type RelayStatusCallback = (status: RelayStatus) => void
+
+export type RelayStatus =
+	| "disconnected"
+	| "connecting"
+	| "connected"
+	| "paired"
+	| "reconnecting"
+	| "shutdown"
+
+export interface RelayClientOptions {
+	url: string
+	clientToken: string
+	clientId: string
+	sessionId: string
+	onDecision: RelayDecisionCallback
+	onStatusChange?: RelayStatusCallback
+	heartbeatIntervalMs?: number
+	maxReconnectDelayMs?: number
+}
+
+const DEFAULT_HEARTBEAT_MS = 30_000
+const DEFAULT_MAX_RECONNECT_MS = 120_000
+const BASE_RECONNECT_MS = 1000
+const JITTER_FACTOR = 0.3
+
+export class RelayClient {
+	private ws: WebSocket | null = null
+	private status: RelayStatus = "disconnected"
+	private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+	private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+	private reconnectAttempt = 0
+	private shutdownRequested = false
+	private seenDecisions = new Set<string>()
+	private pendingUpserts = new Set<string>()
+
+	readonly url: string
+	readonly clientToken: string
+	readonly clientId: string
+	readonly sessionId: string
+	readonly onDecision: RelayDecisionCallback
+	readonly onStatusChange: RelayStatusCallback | undefined
+	private readonly heartbeatIntervalMs: number
+	private readonly maxReconnectDelayMs: number
+
+	constructor(options: RelayClientOptions) {
+		this.url = options.url
+		this.clientToken = options.clientToken
+		this.clientId = options.clientId
+		this.sessionId = options.sessionId
+		this.onDecision = options.onDecision
+		this.onStatusChange = options.onStatusChange
+		this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_MS
+		this.maxReconnectDelayMs = options.maxReconnectDelayMs ?? DEFAULT_MAX_RECONNECT_MS
+	}
+
+	get currentStatus(): RelayStatus {
+		return this.status
+	}
+
+	connect(): void {
+		if (this.shutdownRequested) return
+		this.setStatus("connecting")
+		this.establishConnection()
+	}
+
+	shutdown(): void {
+		this.shutdownRequested = true
+		this.clearTimers()
+		this.setStatus("shutdown")
+		if (this.ws) {
+			try { this.ws.close(1000, "client shutdown") } catch { /* ignore */ }
+			this.ws = null
+		}
+	}
+
+	sendUpsert(event: UpsertEvent): void {
+		if (this.status !== "paired") {
+			this.pendingUpserts.add(event.requestId)
+			return
+		}
+		const msg = buildUpsertMessage(event, this.genMessageId())
+		this.sendJson(msg)
+	}
+
+	sendCancel(event: CancelEvent): void {
+		if (this.status !== "paired") {
+			this.pendingUpserts.delete(event.requestId)
+			return
+		}
+		const msg = buildCancelMessage(event, this.genMessageId())
+		this.sendJson(msg)
+	}
+
+	async sendApplyResult(
+		requestId: string,
+		success: boolean,
+		error?: string,
+	): Promise<void> {
+		if (this.status !== "paired") return
+		const msg = {
+			protocolVersion: 1 as const,
+			messageId: this.genMessageId(),
+			type: "apply_result" as const,
+			sentAt: new Date().toISOString(),
+			payload: {
+				requestId,
+				clientId: this.clientId,
+				sessionId: this.sessionId,
+				success,
+				error,
+			},
+		}
+		this.sendJson(msg)
+	}
+
+	flushPending(): void {
+		if (this.status !== "paired") return
+		for (const rid of this.pendingUpserts) {
+			this.sendUpsert({
+				requestId: rid,
+				clientId: this.clientId,
+				sessionId: this.sessionId,
+				expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+			})
+		}
+		this.pendingUpserts.clear()
+	}
+
+	private establishConnection(): void {
+		if (this.ws) {
+			try { this.ws.close() } catch { /* ignore */ }
+			this.ws = null
+		}
+
+		try {
+			this.ws = new WebSocket(this.url)
+		} catch {
+			this.scheduleReconnect()
+			return
+		}
+
+		this.ws.addEventListener("open", () => {
+			this.reconnectAttempt = 0
+			this.sendHello()
+			setTimeout(() => this.sendPairing(), 50)
+		})
+
+		this.ws.addEventListener("message", (event) => {
+			this.handleMessage(event.data)
+		})
+
+		this.ws.addEventListener("close", (event) => {
+			this.clearHeartbeat()
+			this.ws = null
+			if (this.shutdownRequested) return
+			if (event.code === 4001) {
+				this.setStatus("disconnected")
+				return
+			}
+			this.scheduleReconnect()
+		})
+
+		this.ws.addEventListener("error", () => {
+		})
+	}
+
+	private sendHello(): void {
+		this.sendJson({
+			protocolVersion: 1,
+			messageId: this.genMessageId(),
+			type: "hello",
+			sentAt: new Date().toISOString(),
+			payload: {
+				clientId: this.clientId,
+				sessionId: this.sessionId,
+			},
+		})
+	}
+
+	private sendPairing(): void {
+		this.sendJson({
+			protocolVersion: 1,
+			messageId: this.genMessageId(),
+			type: "pairing",
+			sentAt: new Date().toISOString(),
+			payload: {
+				clientId: this.clientId,
+				sessionId: this.sessionId,
+				pairingCode: this.clientToken,
+			},
+		})
+	}
+
+	private sendHeartbeat(): void {
+		if (this.status !== "paired") return
+		this.sendJson({
+			protocolVersion: 1,
+			messageId: this.genMessageId(),
+			type: "heartbeat",
+			sentAt: new Date().toISOString(),
+			payload: {
+				clientId: this.clientId,
+				sessionId: this.sessionId,
+			},
+		})
+	}
+
+	private startHeartbeat(): void {
+		this.clearHeartbeat()
+		this.heartbeatTimer = setInterval(() => {
+			this.sendHeartbeat()
+		}, this.heartbeatIntervalMs)
+	}
+
+	private clearHeartbeat(): void {
+		if (this.heartbeatTimer) {
+			clearInterval(this.heartbeatTimer)
+			this.heartbeatTimer = null
+		}
+	}
+
+	private handleMessage(data: unknown): void {
+		let raw: unknown
+		try {
+			raw = typeof data === "string" ? JSON.parse(data) : data
+		} catch {
+			return
+		}
+
+		let msg: ServerMessage
+		try {
+			msg = parseServerMessage(raw)
+		} catch {
+			return
+		}
+
+		switch (msg.type) {
+			case "pairing":
+				if (msg.payload.paired) {
+					this.setStatus("paired")
+					this.startHeartbeat()
+					this.flushPending()
+				} else {
+					this.setStatus("disconnected")
+					if (this.ws) {
+						try { this.ws.close(4001, "pairing rejected") } catch { /* ignore */ }
+					}
+				}
+				break
+			case "heartbeat":
+				break
+			case "decision": {
+				const key = `${msg.payload.requestId}:${msg.messageId}`
+				if (this.seenDecisions.has(key)) return
+				this.seenDecisions.add(key)
+				this.onDecision(msg)
+				break
+			}
+			case "error":
+				break
+			default:
+				break
+		}
+	}
+
+	private scheduleReconnect(): void {
+		if (this.shutdownRequested) return
+		this.setStatus("reconnecting")
+
+		const delay = this.calcReconnectDelay()
+		this.reconnectAttempt++
+
+		this.reconnectTimer = setTimeout(() => {
+			if (this.shutdownRequested) return
+			this.establishConnection()
+		}, delay)
+	}
+
+	private calcReconnectDelay(): number {
+		const base = BASE_RECONNECT_MS * Math.pow(2, Math.min(this.reconnectAttempt, 10))
+		const capped = Math.min(base, this.maxReconnectDelayMs)
+		const jitter = capped * JITTER_FACTOR * (Math.random() * 2 - 1)
+		return Math.round(capped + jitter)
+	}
+
+	private sendJson(obj: unknown): void {
+		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+		try {
+			this.ws.send(JSON.stringify(obj))
+		} catch {
+			/* send failure is non-blocking */
+		}
+	}
+
+	private genMessageId(): string {
+		const hex = randomBytes(12).toString("hex")
+		return `relay-${Date.now()}-${hex}`
+	}
+
+	private setStatus(next: RelayStatus): void {
+		if (this.status === next) return
+		this.status = next
+		try { this.onStatusChange?.(next) } catch { /* non-blocking */ }
+	}
+
+	private clearTimers(): void {
+		this.clearHeartbeat()
+		if (this.reconnectTimer) {
+			clearTimeout(this.reconnectTimer)
+			this.reconnectTimer = null
+		}
+	}
+}

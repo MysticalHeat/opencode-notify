@@ -65,3 +65,22 @@ export type {
 	TerminalDetectDeps,
 	RunCommand,
 } from "./types.js"
+
+export {
+	eventToUpsert,
+	buildUpsertMessage,
+	buildCancelMessage,
+	shouldRelayEvent,
+} from "./events.js"
+export type { UpsertEvent, CancelEvent } from "./events.js"
+
+export { RelayClient } from "./relay-client.js"
+export type { RelayClientOptions, RelayStatus, RelayDecisionCallback, RelayStatusCallback } from "./relay-client.js"
+
+export {
+	applyQuestion,
+	rejectQuestion,
+	applyPermission,
+	createOpencodeClient,
+} from "./opencode-client.js"
+export type { ApplyResult, ApplyQuestionParams, ApplyPermissionParams, OpencodeClient as RelayOpencodeClient } from "./opencode-client.js"
