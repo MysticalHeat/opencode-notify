@@ -215,3 +215,185 @@ Pairing test breakdown (31 tests, was 24):
 $ npx turbo run typecheck --force → 6 successful, 0 cached
 $ npx turbo run build --force    → All 4 packages clean
 ```
+
+---
+
+## Review Fix: Atomic repository compensation (I-1)
+
+**Date:** 2026-07-11
+**Commit:** `5be9be0` (`4852082..5be9be0`)
+
+### Issue
+
+In the callback-failure compensation path, the service called `repo.deleteClient(clientId)` and `repo.unconsumePairingCode(code)` as two separate operations. If the process crashed between them, the database could be left in an inconsistent state (client deleted but code still consumed, or vice versa).
+
+### Fix
+
+Replaced the two-step compensation with a single repository-level method `compensateCallbackFailure(clientId, code)` that runs both statements inside one `db.transaction()`:
+
+- `DELETE FROM clients WHERE id = ?`
+- `UPDATE pairing_codes SET consumed = 0, consumed_by_client_id = NULL, consumed_at = NULL WHERE code = ?`
+
+The method returns `true` if either statement changed rows (`||` semantics). This ensures atomicity: either both changes commit or neither does.
+
+### Files Changed
+
+| File | Action | Lines |
+|------|--------|-------|
+| `apps/server/src/db/repository.ts` | Modified | +11 |
+| `apps/server/src/pairing/service.ts` | Modified | -3/+1 |
+| `apps/server/test/repository.test.ts` | Modified | +82 |
+
+### New Repository Tests (4)
+
+| Test | Verifies |
+|------|----------|
+| atomically deletes client and unconsumes pairing code | Full round-trip: pre-condition → compensate → client gone + code retryable → code reusable |
+| returns true when only the pairing code needs un-consuming (client already gone) | Partial state still reports success |
+| returns true when only the client needs deletion (code already unconsumed) | Partial state still reports success |
+| returns false when nothing to compensate (neither exists) | Idempotent no-op returns false |
+
+### Test Evidence
+
+```
+$ npx turbo run test --force
+
+@repo/protocol:test:  ✓ test/messages.test.ts (20 tests)
+@repo/core:test:      ✓ __tests__/request-state.test.ts (86 tests)
+@repo/core:test:      ✓ __tests__/smoke.test.ts (1 test)
+@repo/opencode-plugin:test:  No test files found
+@repo/server:test:    ✓ test/pairing.test.ts (31 tests)
+@repo/server:test:    ✓ test/repository.test.ts (54 tests)  ← +4
+
+ Total: 188 passed (no regressions)
+```
+
+Repository test breakdown (54 tests, was 50):
+
+| Suite | Tests | New |
+|-------|-------|-----|
+| migrations create all required tables | 2 | — |
+| migrations pragmas | 2 | — |
+| config parsing | 9 | — |
+| client token hash | 6 | — |
+| pairing expiry | 5 | — |
+| atomic decision claims | 5 | — |
+| request answers | 2 | — |
+| telegram update uniqueness | 4 | — |
+| outbox idempotency | 8 | — |
+| update last seen | 1 | — |
+| repository transactions | 1 | — |
+| foreign key enforcement | 2 | — |
+| **callback failure compensation** | **4** | **+4** |
+
+### Typecheck / Build
+
+```
+$ npx turbo run typecheck --force → 8 successful, 0 cached
+$ npx turbo run build --force    → All 4 packages clean
+```
+
+---
+
+## Review Fix: Soft client revocation (F1)
+
+**Date:** 2026-07-13
+**Commit:** TBD
+
+### Issue
+
+`deleteClient` physically deleted client rows from the database. The `pairings`, `requests`, and `outbox` tables have foreign key references to `clients(id)`, and `pairing_codes.consumed_by_client_id` also references client IDs. With FK enforcement ON, deleting a client with existing references would fail or leave dangling records. This makes revocation destructive to relational and audit data.
+
+### Fix
+
+**Soft revocation** — clients are never physically deleted from the API surface:
+
+1. **Migration `003-soft-revoke.sql`**: Added `revoked_at TEXT` column to the `clients` table.
+
+2. **`findClientByTokenHash`** now filters `WHERE revoked_at IS NULL` — revoked tokens are rejected by authentication lookups, making them unusable.
+
+3. **`revokeClient` repository method** sets `revoked_at = datetime('now')` instead of deleting the row. Returns `true` when the UPDATE changed rows (idempotent — calling twice returns `true` both times).
+
+4. **`listAllClients`** returns ALL clients including revoked ones, preserving the audit trail. The `/clients` Telegram command now displays `⚠ Revoked: <timestamp>` for revoked clients.
+
+5. **`deleteClient` kept for internal use** (e.g., `compensateCallbackFailure`) — the physical deletion path remains available for emergency cleanup scenarios.
+
+6. **`PairingService.revokeClient`** delegates to `repo.revokeClient` instead of `repo.deleteClient`.
+
+### Files Changed
+
+| File | Action | Lines |
+|------|--------|-------|
+| `apps/server/migrations/003-soft-revoke.sql` | Created | 3 |
+| `apps/server/src/db/migrate.ts` | Modified | +1/-1 |
+| `apps/server/src/db/repository.ts` | Modified | +11/-1 |
+| `apps/server/src/pairing/service.ts` | Modified | +1/-1 |
+| `apps/server/src/telegram/bot.ts` | Modified | +4 |
+| `apps/server/test/pairing.test.ts` | Modified | +33/-12 |
+| `apps/server/test/repository.test.ts` | Modified | +73 |
+
+### RED Phase (Test-First)
+
+2 pairing tests and 6 repository tests written before implementation:
+
+```
+FAIL  apps/server/test/pairing.test.ts > token revocation > revokes a client token via soft revocation (sets revoked_at)
+AssertionError: expected undefined to be defined
+  (ClientRow.revokedAt was undefined — migration not applied, mapClient unchanged)
+
+FAIL  apps/server/test/pairing.test.ts > token revocation > revocation by unauthorized user fails
+AssertionError: expected undefined to be null
+  (ClientRow.revokedAt was undefined — migration not applied, mapClient unchanged)
+```
+
+Repository tests also fail with `TypeError: repo.revokeClient is not a function` (method not yet added to interface/implementation).
+
+### GREEN Phase
+
+After implementing migration, `mapClient` update, `revokeClient` repo method, `findClientByHashStmt` filter, and `PairingService.revokeClient` delegation:
+
+```
+ ✓ test/pairing.test.ts (32 tests) 59ms
+ ✓ test/repository.test.ts (60 tests) 1166ms
+```
+
+### New Tests (7 total)
+
+| Test | Verifies |
+|------|----------|
+| revokes a client token via soft revocation (sets revoked_at) | Client remains in listAllClients, revokedAt is set (not null) |
+| revoked client token is rejected by authentication lookup | findClientByTokenHash returns undefined after revocation |
+| revokeClient sets revoked_at on existing client | Repository-level column is set |
+| revokeClient returns false for nonexistent client | Graceful handling of missing client IDs |
+| findClientByTokenHash excludes revoked clients | Auth gate rejects revoked tokens |
+| listAllClients includes revoked clients for audit | Admin listing preserves all records |
+| revokeClient is idempotent | Second revoke returns true, no-op |
+| revocation by unauthorized user fails (updated) | revokedAt remains null after failed attempt |
+
+### Full Checks
+
+| Check | Result | Details |
+|-------|--------|---------|
+| `@repo/server` tests | 92/92 pass | 32 pairing + 60 repo (was 31+54) |
+| `@repo/server` typecheck | Clean | `tsc --noEmit` |
+| `@repo/protocol` tests | 20/20 pass | No regressions |
+| `@repo/core` tests | 87/87 pass | No regressions |
+| `@repo/opencode-plugin` tests | PassWithNoTests | No regressions |
+| Full workspace typecheck | Clean | All 4 packages |
+| Full workspace build | Clean | All 4 packages |
+
+### TDD Evidence
+
+1. **Soft revocation column**: RED → 003-soft-revoke.sql + mapClient update → GREEN
+2. **Token auth rejection**: RED → findClientByHashStmt WHERE revoked_at IS NULL → GREEN
+3. **Repository revokeClient**: RED (not a function) → method + statement → GREEN
+4. **Service delegation**: RED → repo.revokeClient → GREEN
+5. **Idempotency**: RED → UPDATE always returns true if row exists → GREEN
+
+### Concerns
+
+1. **`deleteClient` still exists.** It remains available for internal compensation paths (`compensateCallbackFailure`) and manual cleanup. Future work could add a flag to `listAllClients` to filter active-only vs. all, or could introduce a separate `purgeClient` method for admin hard-delete with cascade.
+
+2. **No `revoked_at` index.** The current workload (one admin, single-digit clients) does not warrant an index on `revoked_at`. If the client count grows significantly, adding `CREATE INDEX idx_clients_revoked_at ON clients(revoked_at)` would speed up the `IS NULL` filter in `findClientByHashStmt`.
+
+3. **Bot displays emoji for revoked status.** The `/clients` command uses `⚠` to mark revoked clients in Telegram messages. This is purely cosmetic and has no functional impact.

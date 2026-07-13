@@ -178,7 +178,7 @@ export function createPairingService(
       if (!isAuthorized(telegramUserId, authorizedUserId)) {
         return false;
       }
-      return repo.deleteClient(clientId);
+      return repo.revokeClient(clientId);
     },
 
     listClients(telegramUserId: number): ClientRow[] {

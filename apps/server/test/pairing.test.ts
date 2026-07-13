@@ -283,7 +283,7 @@ describe("token handoff via callback", () => {
 // ─── TOKEN REVOCATION ─────────────────────────────────────
 
 describe("token revocation", () => {
-  it("revokes a client token via deleteClient", async () => {
+  it("revokes a client token via soft revocation (sets revoked_at)", async () => {
     const { code } = pairingService.generatePairingCode(60_000);
 
     let clientId: string | undefined;
@@ -303,9 +303,40 @@ describe("token revocation", () => {
     );
     expect(revoked).toBe(true);
 
-    // Client should no longer be in the list
+    // Client should still be in the list (soft revocation for audit)
     const clients = repo.listAllClients();
-    expect(clients.find((c) => c.id === clientId)).toBeUndefined();
+    const found = clients.find((c) => c.id === clientId);
+    expect(found).toBeDefined();
+    expect(found!.revokedAt).toBeDefined();
+    expect(found!.revokedAt).not.toBeNull();
+  });
+
+  it("revoked client token is rejected by authentication lookup", async () => {
+    const { code } = pairingService.generatePairingCode(60_000);
+
+    let clientId: string | undefined;
+    let tokenHash: string | undefined;
+    await pairingService.confirmPairingCode(
+      code,
+      AUTHORIZED_USER_ID,
+      async (_token, client) => {
+        clientId = client.id;
+        tokenHash = client.tokenHash;
+      },
+    );
+    expect(clientId).toBeDefined();
+    expect(tokenHash).toBeDefined();
+
+    // Before revocation, token works
+    const before = repo.findClientByTokenHash(tokenHash!);
+    expect(before).toBeDefined();
+
+    // Revoke
+    pairingService.revokeClient(clientId!, AUTHORIZED_USER_ID);
+
+    // After revocation, token is rejected
+    const after = repo.findClientByTokenHash(tokenHash!);
+    expect(after).toBeUndefined();
   });
 
   it("revocation by unauthorized user fails", async () => {
@@ -326,9 +357,11 @@ describe("token revocation", () => {
     );
     expect(revoked).toBe(false);
 
-    // Client should still exist
+    // Client should still exist and not be revoked
     const clients = repo.listAllClients();
-    expect(clients.find((c) => c.id === clientId)).toBeDefined();
+    const found = clients.find((c) => c.id === clientId);
+    expect(found).toBeDefined();
+    expect(found!.revokedAt).toBeNull();
   });
 
   it("revocation of nonexistent client returns false", () => {

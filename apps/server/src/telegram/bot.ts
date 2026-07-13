@@ -100,10 +100,14 @@ export function createBotHandler(pairingService: PairingService) {
       const lines = clients.map((c) => {
         const created = new Date(c.createdAt).toISOString();
         const lastSeen = new Date(c.lastSeenAt).toISOString();
+        const status = c.revokedAt
+          ? `  ⚠ Revoked: ${new Date(c.revokedAt).toISOString()}`
+          : "  Status: active";
         return [
           `ID: <code>${c.id}</code>`,
           `  Created: ${created}`,
           `  Last seen: ${lastSeen}`,
+          status,
         ].join("\n");
       });
 

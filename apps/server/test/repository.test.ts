@@ -641,6 +641,79 @@ describe("foreign key enforcement", () => {
   });
 });
 
+// ─── SOFT REVOCATION ──────────────────────────────────────
+
+describe("soft revocation", () => {
+  it("revokeClient sets revoked_at on existing client", () => {
+    const client = repo.createClient("soft-revoke-token");
+    expect(client.revokedAt).toBeNull();
+
+    const result = repo.revokeClient(client.id);
+    expect(result).toBe(true);
+
+    const all = repo.listAllClients();
+    const revoked = all.find((c) => c.id === client.id);
+    expect(revoked).toBeDefined();
+    expect(revoked!.revokedAt).toBeDefined();
+    expect(revoked!.revokedAt).not.toBeNull();
+  });
+
+  it("revokeClient returns false for nonexistent client", () => {
+    const result = repo.revokeClient("nonexistent-client-id");
+    expect(result).toBe(false);
+  });
+
+  it("findClientByTokenHash excludes revoked clients", () => {
+    const token = "revoked-lookup-token";
+    const client = repo.createClient(token);
+    const hash = client.tokenHash;
+
+    const before = repo.findClientByTokenHash(hash);
+    expect(before).toBeDefined();
+    expect(before!.id).toBe(client.id);
+
+    repo.revokeClient(client.id);
+
+    const after = repo.findClientByTokenHash(hash);
+    expect(after).toBeUndefined();
+  });
+
+  it("listAllClients includes revoked clients for audit", () => {
+    const active = repo.createClient("active-token");
+    const doomed = repo.createClient("doomed-token");
+
+    repo.revokeClient(doomed.id);
+
+    const all = repo.listAllClients();
+    expect(all.length).toBe(2);
+    expect(all.find((c) => c.id === active.id)).toBeDefined();
+    expect(all.find((c) => c.id === doomed.id)!.revokedAt).toBeDefined();
+    expect(all.find((c) => c.id === doomed.id)!.revokedAt).not.toBeNull();
+  });
+
+  it("revokeClient is idempotent: second revoke returns true", () => {
+    const client = repo.createClient("idem-revoke-token");
+    expect(repo.revokeClient(client.id)).toBe(true);
+    expect(repo.revokeClient(client.id)).toBe(true);
+  });
+
+  it("findClientByTokenHash still returns non-revoked client when another is revoked", () => {
+    const tokenA = "non-revoked-token-a";
+    const tokenB = "non-revoked-token-b";
+    const clientA = repo.createClient(tokenA);
+    const clientB = repo.createClient(tokenB);
+
+    repo.revokeClient(clientB.id);
+
+    const foundA = repo.findClientByTokenHash(clientA.tokenHash);
+    expect(foundA).toBeDefined();
+    expect(foundA!.id).toBe(clientA.id);
+
+    const foundB = repo.findClientByTokenHash(clientB.tokenHash);
+    expect(foundB).toBeUndefined();
+  });
+});
+
 // ─── CALLBACK FAILURE COMPENSATION ──────────────────────────
 
 describe("callback failure compensation", () => {

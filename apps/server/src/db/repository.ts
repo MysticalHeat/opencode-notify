@@ -8,6 +8,7 @@ export interface ClientRow {
   tokenHash: string;
   createdAt: string;
   lastSeenAt: string;
+  revokedAt: string | null;
 }
 
 export interface PairingRow {
@@ -131,6 +132,7 @@ export interface Repository {
   // client management
   createClientWithId(id: string, token: string): ClientRow;
   deleteClient(clientId: string): boolean;
+  revokeClient(clientId: string): boolean;
   listAllClients(): ClientRow[];
 
   // pairing code cleanup
@@ -169,6 +171,7 @@ function mapClient(row: Record<string, unknown>): ClientRow {
     tokenHash: row.token_hash as string,
     createdAt: row.created_at as string,
     lastSeenAt: row.last_seen_at as string,
+    revokedAt: (row.revoked_at as string) ?? null,
   };
 }
 
@@ -263,7 +266,7 @@ export function createRepository(db: Database.Database): Repository {
   `);
 
   const findClientByHashStmt = db.prepare(`
-    SELECT * FROM clients WHERE token_hash = ?
+    SELECT * FROM clients WHERE token_hash = ? AND revoked_at IS NULL
   `);
 
   const updateLastSeenStmt = db.prepare(`
@@ -393,6 +396,10 @@ export function createRepository(db: Database.Database): Repository {
 
   const deleteClientStmt = db.prepare(`
     DELETE FROM clients WHERE id = ?
+  `);
+
+  const revokeClientStmt = db.prepare(`
+    UPDATE clients SET revoked_at = datetime('now') WHERE id = ?
   `);
 
   const listAllClientsStmt = db.prepare(`
@@ -661,6 +668,13 @@ export function createRepository(db: Database.Database): Repository {
     deleteClient(clientId: string): boolean {
       return db.transaction(() => {
         const info = deleteClientStmt.run(clientId);
+        return info.changes > 0;
+      })();
+    },
+
+    revokeClient(clientId: string): boolean {
+      return db.transaction(() => {
+        const info = revokeClientStmt.run(clientId);
         return info.changes > 0;
       })();
     },
