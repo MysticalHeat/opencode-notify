@@ -50,3 +50,33 @@ Extracted desktop/cmux notification behavior from `~/.config/opencode/plugins/no
 - `node-notifier` dynamic import catches missing/offline gracefully (returns false, no crash)
 - No integration test with real `node-notifier` — unit tests mock all external deps
 - Session metadata fetching depends on `@opencode-ai/sdk` types at design time but is optional at runtime (gracefully returns `{}` on error)
+
+## Review Fixes (commit `ac94f5b`)
+
+**Status:** Complete  
+**Commit:** `fix(plugin): address Task 8 review Moderate findings`
+
+### Findings addressed
+
+| Finding | Resolution |
+|---------|------------|
+| Terminal-focus suppression missing | Restored via new `src/focus.ts` module with injectable `TerminalDetectDeps` |
+| Notification activation/bundleId missing | `activate`/`bundleId` now passed to `sendDesktopNotification` from terminal info |
+| Session metadata fetched twice per event | Fixed: `shouldSkipChildSession` called once, both `skip` and `session` destructured |
+| No platform/terminal deps injection | Added `NotifyDeps.terminal` with `TerminalDetectDeps` (platform, env, runCommand) |
+
+### New files
+
+| File | Purpose |
+|------|---------|
+| `src/focus.ts` | Terminal detection, bundleId mapping, focus state, suppression decision |
+| `__tests__/focus.test.ts` | 41 unit tests for focus suppression, terminal detection, bundle mapping |
+| `__tests__/plugin.test.ts` | 9 integration tests for single-fetch, focus suppression pipeline, tool hooks |
+
+### Checks
+
+- [x] 140/140 tests pass (was 90)
+- [x] Typecheck passes
+- [x] Lint passes
+- [x] No global config or machine-specific paths reintroduced
+- [x] No relay/Telegram scope added
