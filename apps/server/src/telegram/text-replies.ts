@@ -1,7 +1,7 @@
 import type { Repository } from "../db/repository.js";
 
 export interface TextReplyResult {
-  type: "correlated" | "orphan" | "stale";
+  type: "correlated" | "orphan" | "unauthorized" | "stale";
   requestId?: string;
   clientId?: string;
   sessionId?: string;
@@ -17,7 +17,7 @@ export function handleTextReply(
   replyToMessageId: number | undefined,
 ): TextReplyResult {
   if (telegramUserId !== authorizedUserId) {
-    return { type: "stale" };
+    return { type: "unauthorized" };
   }
 
   if (!text || text.trim().length === 0) {

@@ -1,7 +1,7 @@
 import type { Repository } from "../db/repository.js";
 
 export interface CallbackResult {
-  type: "permission" | "question" | "multi_toggle" | "multi_done" | "custom_text" | "stale" | "expired";
+  type: "permission" | "question" | "multi_toggle" | "multi_done" | "custom_text" | "unauthorized" | "stale" | "expired";
   requestId?: string;
   clientId?: string;
   sessionId?: string;
@@ -23,7 +23,7 @@ export function handleCallbackQuery(
   messageId: number,
 ): CallbackResult {
   if (telegramUserId !== authorizedUserId) {
-    return { type: "stale" };
+    return { type: "unauthorized" };
   }
 
   const cb = repo.findAndClaimCallbackId(actionId);

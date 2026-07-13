@@ -154,3 +154,26 @@ export function renderPermissionDecision(action: string, approved: boolean, alwa
   const alwaysSuffix = always ? " (always)" : "";
   return `Permission: ${action}\nDecision: ${approved ? "Approved" : "Rejected"}${alwaysSuffix}`;
 }
+
+export function renderMultiSelectUpdateKeyboard(
+  repo: Repository,
+  requestId: string,
+  options: Array<{ label: string; value: string }>,
+  selectedValues: string[],
+  expiresAt: Date,
+): InlineKeyboardMarkup {
+  const rows = options.map((opt) => {
+    const isSelected = selectedValues.includes(opt.value);
+    const toggleId = storeCallbackId(repo, requestId, "question_multi_toggle", expiresAt, { value: opt.value, options });
+    const label = `${isSelected ? "X" : " "} ${opt.label}`;
+    return [{ text: label, callback_data: toggleId }];
+  });
+
+  const doneId = storeCallbackId(repo, requestId, "question_multi_done", expiresAt, { selectedValues, options });
+  const customId = storeCallbackId(repo, requestId, "question_custom_text", expiresAt, {});
+
+  rows.push([{ text: "Done", callback_data: doneId }]);
+  rows.push([{ text: "Enter custom answer...", callback_data: customId }]);
+
+  return { inline_keyboard: rows };
+}

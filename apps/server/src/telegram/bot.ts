@@ -2,7 +2,7 @@ import { Bot, type Context } from "grammy";
 import type { InlineKeyboardMarkup } from "grammy/types";
 import type { PairingService } from "../pairing/service.js";
 import type { Repository, RequestRow } from "../db/repository.js";
-import { renderPermissionKeyboard, renderQuestionKeyboard, renderTerminalMessage, renderPermissionDecision } from "./render.js";
+import { renderPermissionKeyboard, renderQuestionKeyboard, renderTerminalMessage, renderPermissionDecision, renderMultiSelectUpdateKeyboard } from "./render.js";
 import { handleCallbackQuery } from "./callbacks.js";
 import { handleTextReply } from "./text-replies.js";
 
@@ -40,6 +40,7 @@ const MSG_REVOKE_FAILED = "Failed to revoke client. Check the client ID and try 
 const MSG_NO_CLIENTS = "No registered clients found.";
 const MSG_CALLBACK_STALE = "This action is no longer available.";
 const MSG_CALLBACK_EXPIRED = "This request has expired.";
+const MSG_UNAUTHORIZED_CALLBACK = "You are not authorized for this action.";
 const MSG_QUESTION_DONE = "Answer recorded.";
 const MSG_CUSTOM_TEXT_PROMPT = "Please reply to this message with your answer.";
 
@@ -216,8 +217,19 @@ export function createBotAdapter(
 
       if (replyResult.type === "correlated" && replyResult.requestId) {
         const req = repo.findRequestByRequestIdAndClient(replyResult.requestId, replyResult.clientId!);
-        enqueueDecision(repo, replyResult as { requestId: string; clientId: string; sessionId: string }, req);
+        enqueueDecision(repo, {
+          requestId: replyResult.requestId,
+          clientId: replyResult.clientId!,
+          sessionId: replyResult.sessionId!,
+          answerValue: replyResult.text,
+          answerLabel: replyResult.text,
+        }, req);
         await ctx.reply(MSG_QUESTION_DONE, { reply_to_message_id: msg.message_id });
+        return;
+      }
+
+      if (replyResult.type === "unauthorized") {
+        await ctx.reply(MSG_UNAUTHORIZED_CALLBACK, { reply_to_message_id: msg.message_id });
         return;
       }
 
@@ -268,6 +280,12 @@ export function createBotAdapter(
       chatId,
       messageId,
     );
+
+    if (result.type === "unauthorized") {
+      await ctx.answerCallbackQuery();
+      await ctx.reply(MSG_UNAUTHORIZED_CALLBACK);
+      return;
+    }
 
     if (result.type === "stale" || result.type === "expired") {
       await ctx.answerCallbackQuery();
@@ -332,8 +350,17 @@ export function createBotAdapter(
           toggledLabels,
         ].join("\n");
 
+        const expiresAt = new Date(req.expiresAt);
+        const newMarkup = renderMultiSelectUpdateKeyboard(
+          repo,
+          req.id,
+          qPayload.options,
+          selected,
+          expiresAt,
+        );
+
         try {
-          await ctx.editMessageText(newText);
+          await ctx.editMessageText(newText, { reply_markup: newMarkup });
         } catch {
           // Message may not exist, ignore
         }

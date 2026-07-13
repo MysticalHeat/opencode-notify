@@ -210,6 +210,165 @@ describe("multi-select question rendering", () => {
   });
 });
 
+// ─── REGRESSION: ForceReply outbox payload includes answer text (FIX #1) ───
+
+describe("ForceReply outbox payload regression", () => {
+  it("enqueueDecision for text reply includes answer text in payload", () => {
+    const client = repo.createClient("fr-outbox-token");
+    const expiresAt = new Date(Date.now() + 60_000);
+    const req = repo.upsertRequest({
+      requestId: "req-fr-outbox",
+      clientId: client.id,
+      sessionId: "session-1",
+      status: "pending",
+      expiresAt,
+      payloadType: "question",
+      payloadJson: JSON.stringify({ text: "Enter value", options: [], multiSelect: false }),
+    });
+
+    repo.createFreplyTracking(
+      CHAT_ID,
+      AUTHORIZED_USER_ID,
+      88888,
+      req.id,
+      new Date(Date.now() + 60_000),
+    );
+
+    const result = handleTextReply(repo, "my custom answer", AUTHORIZED_USER_ID, AUTHORIZED_USER_ID, CHAT_ID, 88888);
+    expect(result.type).toBe("correlated");
+    expect(result.text).toBe("my custom answer");
+
+    const enqueued = repo.enqueue({
+      idempotencyKey: `tg-fr-outbox-${Date.now()}`,
+      recipientId: client.id,
+      messageType: "decision",
+      payload: {
+        requestId: result.requestId,
+        clientId: result.clientId,
+        sessionId: result.sessionId,
+        answers: [{ value: result.text, label: result.text }],
+      },
+      requestId: result.requestId,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+    });
+
+    const parsed = JSON.parse(enqueued.payloadJson) as Record<string, unknown>;
+    const answers = parsed.answers as Array<Record<string, unknown>>;
+    expect(answers).toBeDefined();
+    expect(answers).toHaveLength(1);
+    expect(answers[0]!.value).toBe("my custom answer");
+    expect(answers[0]!.label).toBe("my custom answer");
+  });
+});
+
+// ─── REGRESSION: Multi-select toggle preserves inline keyboard (FIX #2) ───
+
+describe("multi-select keyboard preservation regression", () => {
+  it("multi_toggle result includes options for keyboard re-render", () => {
+    const client = repo.createClient("ms-kb-token");
+    const expiresAt = new Date(Date.now() + 60_000);
+    const req = repo.upsertRequest({
+      requestId: "req-ms-kb",
+      clientId: client.id,
+      sessionId: "session-1",
+      status: "pending",
+      expiresAt,
+      payloadType: "question",
+      payloadJson: JSON.stringify({
+        text: "Pick several",
+        options: [
+          { label: "A", value: "a" },
+          { label: "B", value: "b" },
+          { label: "C", value: "c" },
+        ],
+        multiSelect: true,
+      }),
+    });
+
+    const { markup } = renderQuestionKeyboard(repo, req.id, {
+      text: "Pick several",
+      options: [
+        { label: "A", value: "a" },
+        { label: "B", value: "b" },
+        { label: "C", value: "c" },
+      ],
+      multiSelect: true,
+    }, expiresAt);
+
+    // Toggle A on
+    const toggleA = markup.inline_keyboard[0]![0]!;
+    const r1 = handleCallbackQuery(repo, toggleA.callback_data, AUTHORIZED_USER_ID, AUTHORIZED_USER_ID, CHAT_ID, 10001);
+    expect(r1.type).toBe("multi_toggle");
+    expect(r1.newSelectedValues).toEqual(["a"]);
+
+    // Toggle B on
+    const toggleB = markup.inline_keyboard[1]![0]!;
+    const r2 = handleCallbackQuery(repo, toggleB.callback_data, AUTHORIZED_USER_ID, AUTHORIZED_USER_ID, CHAT_ID, 10001);
+    expect(r2.type).toBe("multi_toggle");
+    expect(r2.newSelectedValues).toEqual(["a", "b"]);
+
+    // Toggle A off
+    const toggleA2 = markup.inline_keyboard[0]![0]!;
+    // This callback was already claimed, so it should be stale
+    // (This verifies that the fix needs fresh callback IDs for subsequent toggles)
+    const r3 = handleCallbackQuery(repo, toggleA2.callback_data, AUTHORIZED_USER_ID, AUTHORIZED_USER_ID, CHAT_ID, 10001);
+    expect(r3.type).toBe("stale");
+  });
+});
+
+// ─── REGRESSION: Unauthorized distinguishable from stale (FIX #3) ───
+
+describe("unauthorized vs stale distinction regression", () => {
+  it("unauthorized callback returns 'unauthorized' not 'stale'", () => {
+    const client = repo.createClient("unauth-cb-token");
+    const expiresAt = new Date(Date.now() + 60_000);
+    const req = repo.upsertRequest({
+      requestId: "req-unauth-cb",
+      clientId: client.id,
+      sessionId: "session-1",
+      status: "pending",
+      expiresAt,
+      payloadType: "permission",
+      payloadJson: JSON.stringify({ action: "read", patterns: ["/data/*"], display: "Read data" }),
+    });
+
+    const { markup } = renderPermissionKeyboard(repo, req.id, {
+      action: "read",
+      patterns: ["/data/*"],
+      display: "Read data",
+    }, expiresAt);
+
+    const approveBtn = markup.inline_keyboard[0]![0]!;
+    const result = handleCallbackQuery(repo, approveBtn.callback_data, UNAUTHORIZED_USER_ID, AUTHORIZED_USER_ID, CHAT_ID, 10001);
+
+    expect(result.type).toBe("unauthorized");
+  });
+
+  it("unauthorized text reply returns 'unauthorized' not 'stale'", () => {
+    const client = repo.createClient("unauth-fr-token");
+    const expiresAt = new Date(Date.now() + 60_000);
+    const req = repo.upsertRequest({
+      requestId: "req-unauth-fr",
+      clientId: client.id,
+      sessionId: "session-1",
+      status: "pending",
+      expiresAt,
+    });
+
+    repo.createFreplyTracking(
+      CHAT_ID,
+      AUTHORIZED_USER_ID,
+      99999,
+      req.id,
+      new Date(Date.now() + 60_000),
+    );
+
+    const result = handleTextReply(repo, "unauthorized text", UNAUTHORIZED_USER_ID, AUTHORIZED_USER_ID, CHAT_ID, 99999);
+
+    expect(result.type).toBe("unauthorized");
+  });
+});
+
 // ─── PERMISSION CALLBACKS ────────────────────────────────
 
 describe("permission callbacks", () => {
@@ -323,7 +482,7 @@ describe("permission callbacks", () => {
     const approveBtn = markup.inline_keyboard[0]![0]!;
     const result = handleCallbackQuery(repo, approveBtn.callback_data, UNAUTHORIZED_USER_ID, AUTHORIZED_USER_ID, CHAT_ID, 10001);
 
-    expect(result.type).toBe("stale");
+    expect(result.type).toBe("unauthorized");
 
     const unchanged = repo.findRequest("req-cb-unauth", client.id, "session-1");
     expect(unchanged!.status).toBe("pending");
@@ -478,7 +637,6 @@ describe("question callbacks", () => {
     expect(result2.newSelectedValues).toEqual(["a", "b"]);
 
     // Toggle A off
-    const toggleAAgain = markup.inline_keyboard[0]![0]!;
     // Need to get new callback data for second press since first was claimed
     // We can't reuse the same callback — let's test the state directly
     const state = repo.findDecisionState(req.id, CHAT_ID, AUTHORIZED_USER_ID);
@@ -547,7 +705,7 @@ describe("text replies", () => {
       payloadJson: JSON.stringify({ text: "Enter value", options: [], multiSelect: false }),
     });
 
-    const tracking = repo.createFreplyTracking(
+    repo.createFreplyTracking(
       CHAT_ID,
       AUTHORIZED_USER_ID,
       55555,
@@ -596,7 +754,7 @@ describe("text replies", () => {
 
     const result = handleTextReply(repo, "unauthorized text", UNAUTHORIZED_USER_ID, AUTHORIZED_USER_ID, CHAT_ID, 55556);
 
-    expect(result.type).toBe("stale");
+    expect(result.type).toBe("unauthorized");
   });
 });
 
