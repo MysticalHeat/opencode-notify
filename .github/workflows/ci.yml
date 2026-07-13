@@ -54,6 +54,9 @@ jobs:
             " || exit 1
           done
 
+      - name: Validate workflow files
+        run: node scripts/validate-workflows.mjs
+
   docker-smoke:
     name: Docker Build Smoke
     runs-on: ubuntu-latest

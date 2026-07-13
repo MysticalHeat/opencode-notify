@@ -54,10 +54,10 @@ registry and token are configured correctly.
 Install the latest published release:
 
 ```bash
-npm install @nomli/opencode-notify@1.0.0
+npm install @nomli/opencode-notify@0.0.0
 ```
 
-Always pin to an exact version using `@<version>`. Ranges (`^1.0.0`) are not
+Always pin to an exact version using `@<version>`. Ranges (`^0.0.0`) are not
 recommended because GitHub Packages may throttle unauthenticated metadata
 requests that npm uses during version resolution.
 
@@ -101,7 +101,7 @@ npm list @nomli/opencode-notify
 npm view @nomli/opencode-notify versions
 
 # Install a specific version
-npm install @nomli/opencode-notify@1.1.0
+npm install @nomli/opencode-notify@0.1.0
 ```
 
 **Restart required:** OpenCode must be restarted after any plugin
@@ -184,7 +184,7 @@ npm cache clean --force
 rm -rf ~/.npm/_cacache
 
 # Retry
-npm install @nomli/opencode-notify@1.0.0
+npm install @nomli/opencode-notify@0.0.0
 ```
 
 ### Plugin load cache

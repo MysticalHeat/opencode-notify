@@ -6,7 +6,6 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: write
   packages: write
   attestations: write
   id-token: write
@@ -37,6 +36,14 @@ jobs:
 
       - name: Publish
         working-directory: packages/opencode-plugin
-        run: npm publish --provenance
+        run: |
+          set -e
+          echo "::group::npm publish --provenance"
+          npm publish --provenance
+          echo "::endgroup::"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify published package
+        working-directory: packages/opencode-plugin
+        run: npm view @nomli/opencode-notify version dist.tarball

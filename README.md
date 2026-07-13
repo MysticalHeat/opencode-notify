@@ -14,7 +14,7 @@ Cross-platform desktop and Telegram notification plugin for OpenCode.
 ## Quick start
 
 ```bash
-npm install @nomli/opencode-notify@1.0.0
+npm install @nomli/opencode-notify@0.0.0
 ```
 
 See [docs/operations.md](./docs/operations.md) for registry setup, PAT
