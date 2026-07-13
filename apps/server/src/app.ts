@@ -27,7 +27,7 @@ export interface AppOptions {
 }
 
 export async function createApp(options: AppOptions): Promise<ReturnType<typeof Fastify>> {
-  const { db, repo, config, pairingService, botAdapter, ready } = options;
+  const { repo, config, pairingService, botAdapter, ready } = options;
 
   setDbReady(ready?.dbReady ?? false);
   setBotReady(ready?.botReady ?? false);

@@ -133,7 +133,7 @@ describe("WebSocket gateway authentication", () => {
   }));
 
   it("accepts connection with valid token", () => new Promise<void>((done) => {
-    const client = repo.createClient("valid-token");
+    const _client = repo.createClient("valid-token");
     const ws = new WebSocket(wsUrl(port, `?token=valid-token`));
     ws.on("open", () => {
       ws.close();
@@ -215,7 +215,7 @@ describe("WebSocket pairing", () => {
 
 describe("WebSocket connection management", () => {
   it("replaces duplicate connection for same client ID", async () => {
-    const client = repo.createClient("dup-token");
+    const _client = repo.createClient("dup-token");
 
     const ws1 = new WebSocket(wsUrl(port, `?token=dup-token`));
     await new Promise<void>((resolve) => { ws1.on("open", () => resolve()); });
@@ -237,7 +237,7 @@ describe("WebSocket connection management", () => {
   });
 
   it("cleans up connection on heartbeat timeout", async () => {
-    const client = repo.createClient("heartbeat-token");
+    const _client = repo.createClient("heartbeat-token");
     const ws = new WebSocket(wsUrl(port, `?token=heartbeat-token`));
     await new Promise<void>((resolve) => { ws.on("open", () => resolve()); });
 
@@ -794,12 +794,12 @@ describe("apply_result idempotency (H2)", () => {
 
     const ws = new WebSocket(wsUrl(port, `?token=cleanup-ack-token`));
 
-    let decisionCount = 0;
+    let _decisionCount = 0;
     let ackSent = false;
     ws.on("message", (raw) => {
       const parsed = JSON.parse(raw.toString());
       if (parsed.type === "decision" && !ackSent) {
-        decisionCount++;
+        _decisionCount++;
         ackSent = true;
         ws.send(JSON.stringify(clientMsg("apply_result", {
           requestId: "req-cleanup",

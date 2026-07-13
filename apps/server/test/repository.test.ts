@@ -265,7 +265,7 @@ describe("pairing expiry", () => {
 
   it("expirePairings returns count of expired pairings", () => {
     const past = new Date(Date.now() - 1_000);
-    const future = new Date(Date.now() + 60_000);
+    const _future = new Date(Date.now() + 60_000);
 
     repo.createPairing(clientA.id, clientB.id, "PAIR-OLD", past);
 
@@ -761,7 +761,7 @@ describe("callback failure compensation", () => {
 
   it("returns true even when only the pairing code needs un-consuming (client already gone)", () => {
     const expiresAt = new Date(Date.now() + 60_000);
-    const pc = repo.createPairingCode("COMP-CODE-2", expiresAt);
+    const _pc = repo.createPairingCode("COMP-CODE-2", expiresAt);
     const client = repo.createClient("comp-token-2");
     repo.consumePairingCode("COMP-CODE-2", client.id);
 
