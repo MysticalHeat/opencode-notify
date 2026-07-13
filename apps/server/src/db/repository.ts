@@ -76,6 +76,8 @@ export interface OutboxRow {
   status: "pending" | "sent" | "failed";
   createdAt: string;
   sentAt: string | null;
+  requestId: string | null;
+  expiresAt: string | null;
 }
 
 // ─── Repository interface ─────────────────────────────────
@@ -103,6 +105,10 @@ export interface Repository {
     clientId: string,
     sessionId: string,
   ): RequestRow | undefined;
+  findRequestByRequestIdAndClient(
+    requestId: string,
+    clientId: string,
+  ): RequestRow | undefined;
   updateRequestStatus(id: string, status: RequestStatus): RequestRow;
   expireRequests(): number;
 
@@ -122,6 +128,7 @@ export interface Repository {
   dequeuePending(limit: number): OutboxRow[];
   markSent(id: string): void;
   markFailed(id: string): void;
+  markSentByRequestAndClient(requestId: string, clientId: string): number;
 
   // pairing codes (one-time, short-lived)
   createPairingCode(code: string, expiresAt: Date): PairingCodeRow;
@@ -157,6 +164,8 @@ export interface EnqueueParams {
   recipientId: string;
   messageType: string;
   payload: unknown;
+  requestId?: string;
+  expiresAt?: Date;
 }
 
 // ─── Helpers ──────────────────────────────────────────────
@@ -241,6 +250,8 @@ function mapOutbox(row: Record<string, unknown>): OutboxRow {
     status: row.status as OutboxRow["status"],
     createdAt: row.created_at as string,
     sentAt: row.sent_at as string | null,
+    requestId: (row.request_id as string) ?? null,
+    expiresAt: (row.expires_at as string) ?? null,
   };
 }
 
@@ -350,13 +361,14 @@ export function createRepository(db: Database.Database): Repository {
   // ── Outbox ───────────────────────────────────────────
 
   const enqueueStmt = db.prepare(`
-    INSERT INTO outbox (id, idempotency_key, recipient_id, message_type, payload_json, status, created_at)
-    VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))
+    INSERT INTO outbox (id, idempotency_key, recipient_id, message_type, payload_json, status, created_at, request_id, expires_at)
+    VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'), ?, ?)
   `);
 
   const dequeueStmt = db.prepare(`
     SELECT * FROM outbox
     WHERE status = 'pending'
+      AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
     ORDER BY created_at ASC
     LIMIT ?
   `);
@@ -367,6 +379,18 @@ export function createRepository(db: Database.Database): Repository {
 
   const markFailedStmt = db.prepare(`
     UPDATE outbox SET status = 'failed', sent_at = datetime('now') WHERE id = ?
+  `);
+
+  const markSentByRequestAndClientStmt = db.prepare(`
+    UPDATE outbox SET status = 'sent', sent_at = datetime('now')
+    WHERE recipient_id = ? AND request_id = ? AND status = 'pending'
+  `);
+
+  const findRequestByFieldsStmt = db.prepare(`
+    SELECT * FROM requests
+    WHERE request_id = ? AND client_id = ?
+    ORDER BY updated_at DESC
+    LIMIT 1
   `);
 
   // ── Pairing Codes ─────────────────────────────────────
@@ -508,6 +532,16 @@ export function createRepository(db: Database.Database): Repository {
       return row ? mapRequest(row) : undefined;
     },
 
+    findRequestByRequestIdAndClient(
+      requestId: string,
+      clientId: string,
+    ): RequestRow | undefined {
+      const row = findRequestByFieldsStmt.get(requestId, clientId) as
+        | Record<string, unknown>
+        | undefined;
+      return row ? mapRequest(row) : undefined;
+    },
+
     updateRequestStatus(id: string, status: RequestStatus): RequestRow {
       return db.transaction(() => {
         // Determine allowed previous states for this transition
@@ -580,6 +614,8 @@ export function createRepository(db: Database.Database): Repository {
     enqueue(params: EnqueueParams): OutboxRow {
       const id = randomUUID();
       const payloadJson = JSON.stringify(params.payload);
+      const requestId = params.requestId ?? null;
+      const expiresAtStr = params.expiresAt ? toIso(params.expiresAt) : null;
       return db.transaction(() => {
         enqueueStmt.run(
           id,
@@ -587,6 +623,8 @@ export function createRepository(db: Database.Database): Repository {
           params.recipientId,
           params.messageType,
           payloadJson,
+          requestId,
+          expiresAtStr,
         );
         return mapOutbox(
           db.prepare("SELECT * FROM outbox WHERE id = ?").get(id) as Record<
@@ -611,6 +649,13 @@ export function createRepository(db: Database.Database): Repository {
     markFailed(id: string): void {
       db.transaction(() => {
         markFailedStmt.run(id);
+      })();
+    },
+
+    markSentByRequestAndClient(requestId: string, clientId: string): number {
+      return db.transaction(() => {
+        const info = markSentByRequestAndClientStmt.run(clientId, requestId);
+        return info.changes;
       })();
     },
 

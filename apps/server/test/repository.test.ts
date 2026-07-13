@@ -798,3 +798,124 @@ describe("callback failure compensation", () => {
     expect(result).toBe(false);
   });
 });
+
+describe("outbox expiry and request tracking (H1)", () => {
+  let client: { id: string };
+
+  beforeEach(() => {
+    client = repo.createClient("outbox-expiry-token");
+  });
+
+  it("enqueue stores requestId and expiresAt", () => {
+    const expiresAt = new Date(Date.now() + 60_000);
+    const entry = repo.enqueue({
+      idempotencyKey: "track-1",
+      recipientId: client.id,
+      messageType: "decision",
+      payload: { requestId: "req-track" },
+      requestId: "req-track",
+      expiresAt,
+    });
+    expect(entry.requestId).toBe("req-track");
+    expect(entry.expiresAt).toBeTruthy();
+  });
+
+  it("dequeuePending filters out expired entries", () => {
+    const pastExpiry = new Date(Date.now() - 60_000);
+    const futureExpiry = new Date(Date.now() + 60_000);
+
+    repo.enqueue({
+      idempotencyKey: "expired-1",
+      recipientId: client.id,
+      messageType: "decision",
+      payload: { requestId: "req-exp" },
+      requestId: "req-exp",
+      expiresAt: pastExpiry,
+    });
+
+    repo.enqueue({
+      idempotencyKey: "valid-1",
+      recipientId: client.id,
+      messageType: "decision",
+      payload: { requestId: "req-valid" },
+      requestId: "req-valid",
+      expiresAt: futureExpiry,
+    });
+
+    const pending = repo.dequeuePending(10);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.idempotencyKey).toBe("valid-1");
+  });
+
+  it("dequeuePending includes entries without expiresAt", () => {
+    repo.enqueue({
+      idempotencyKey: "no-expiry-1",
+      recipientId: client.id,
+      messageType: "pairing",
+      payload: {},
+    });
+
+    const pending = repo.dequeuePending(10);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.idempotencyKey).toBe("no-expiry-1");
+  });
+
+  it("markSentByRequestAndClient marks all matching pending entries", () => {
+    const expiresAt = new Date(Date.now() + 60_000);
+
+    repo.enqueue({
+      idempotencyKey: "clean-1",
+      recipientId: client.id,
+      messageType: "decision",
+      payload: { requestId: "req-clean" },
+      requestId: "req-clean",
+      expiresAt,
+    });
+
+    repo.enqueue({
+      idempotencyKey: "clean-2",
+      recipientId: client.id,
+      messageType: "decision",
+      payload: { requestId: "req-clean", note: "second" },
+      requestId: "req-clean",
+      expiresAt,
+    });
+
+    repo.enqueue({
+      idempotencyKey: "clean-other",
+      recipientId: client.id,
+      messageType: "decision",
+      payload: { requestId: "req-other" },
+      requestId: "req-other",
+      expiresAt,
+    });
+
+    const changes = repo.markSentByRequestAndClient("req-clean", client.id);
+    expect(changes).toBe(2);
+
+    const pending = repo.dequeuePending(10);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.idempotencyKey).toBe("clean-other");
+  });
+
+  it("findRequestByRequestIdAndClient returns latest request", () => {
+    const expiresAt = new Date(Date.now() + 60_000);
+    repo.upsertRequest({
+      requestId: "req-lookup",
+      clientId: client.id,
+      sessionId: "session-1",
+      status: "pending",
+      expiresAt,
+    });
+
+    const found = repo.findRequestByRequestIdAndClient("req-lookup", client.id);
+    expect(found).toBeDefined();
+    expect(found!.requestId).toBe("req-lookup");
+    expect(found!.clientId).toBe(client.id);
+  });
+
+  it("findRequestByRequestIdAndClient returns undefined for missing request", () => {
+    const found = repo.findRequestByRequestIdAndClient("nonexistent", client.id);
+    expect(found).toBeUndefined();
+  });
+});

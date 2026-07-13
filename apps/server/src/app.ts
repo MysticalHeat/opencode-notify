@@ -21,16 +21,19 @@ export interface AppOptions {
   repo: Repository;
   config: AppConfig;
   pairingService?: PairingService;
+  ready?: { dbReady: boolean; botReady: boolean };
 }
 
 export async function createApp(options: AppOptions): Promise<ReturnType<typeof Fastify>> {
-  const { db, repo, config, pairingService } = options;
+  const { db, repo, config, pairingService, ready } = options;
 
-  setDbReady(true);
-  setBotReady(true);
+  setDbReady(ready?.dbReady ?? false);
+  setBotReady(ready?.botReady ?? false);
 
   const app = Fastify({ logger: { level: config.loggingLevel } });
-  await app.register(fastifyWebsocket);
+  await app.register(fastifyWebsocket, {
+    options: { maxPayload: config.maxMessageBytes },
+  });
 
   const registry = createConnectionRegistry(
     config.heartbeatIntervalMs,

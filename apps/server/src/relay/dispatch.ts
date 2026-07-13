@@ -1,6 +1,14 @@
 import type { Repository, OutboxRow } from "../db/repository.js";
 import type { ConnectionRegistry } from "./connections.js";
 
+const TERMINAL_REQUEST_STATUSES = new Set([
+  "applied",
+  "rejected",
+  "cancelled",
+  "expired",
+  "failed",
+]);
+
 export interface DispatchService {
   start(): void;
   stop(): void;
@@ -50,6 +58,8 @@ export function createDispatchService(
     const conn = registry.get(entry.recipientId);
     if (!conn) return;
 
+    if (!shouldDispatch(entry)) return;
+
     try {
       const payload = JSON.parse(entry.payloadJson);
       const msg = {
@@ -77,6 +87,8 @@ export function createDispatchService(
       const conn = registry.get(entry.recipientId);
       if (!conn) continue;
 
+      if (!shouldDispatch(entry)) continue;
+
       try {
         const payload = JSON.parse(entry.payloadJson);
         const msg = {
@@ -97,6 +109,28 @@ export function createDispatchService(
     return dispatched;
   }
 
+  function shouldDispatch(entry: OutboxRow): boolean {
+    if (entry.messageType !== "decision") return true;
+    if (!entry.requestId) return true;
+
+    const req = repo.findRequestByRequestIdAndClient(
+      entry.requestId,
+      entry.recipientId,
+    );
+
+    if (!req) {
+      repo.markSent(entry.id);
+      return false;
+    }
+
+    if (TERMINAL_REQUEST_STATUSES.has(req.status)) {
+      repo.markSent(entry.id);
+      return false;
+    }
+
+    return req.status === "dispatching";
+  }
+
   async function handleApplyAcknowledgement(
     requestId: string,
     clientId: string,
@@ -111,19 +145,7 @@ export function createDispatchService(
     const newStatus = success ? "applied" : "failed";
     repo.updateRequestStatus(req.id, newStatus);
 
-    const applyIdempotencyKey = `apply:${requestId}:${clientId}:${sessionId}`;
-    const pending = repo.dequeuePending(50);
-    for (const entry of pending) {
-      if (entry.idempotencyKey === applyIdempotencyKey) {
-        return;
-      }
-      if (entry.recipientId === clientId && entry.status === "pending") {
-        const payload = JSON.parse(entry.payloadJson);
-        if (payload.requestId === requestId) {
-          repo.markSent(entry.id);
-        }
-      }
-    }
+    repo.markSentByRequestAndClient(requestId, clientId);
   }
 
   return { start, stop, dispatchPending, handleApplyAcknowledgement };

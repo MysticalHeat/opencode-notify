@@ -80,7 +80,7 @@ beforeAll(async () => {
   };
 
   const { createApp } = await import("../src/app.js");
-  app = await createApp({ db, repo, config, pairingService });
+  app = await createApp({ db, repo, config, pairingService, ready: { dbReady: true, botReady: true } });
 
   await app.listen({ port: 0, host: "127.0.0.1" });
   const addr = app.server.address()! as { port: number };
@@ -345,6 +345,8 @@ describe("offline outbox and reconnect delivery", () => {
         sessionId: "session-1",
         approved: true,
       },
+      requestId: "req-offline",
+      expiresAt,
     });
     expect(outboxEntry.status).toBe("pending");
   });
@@ -362,6 +364,7 @@ describe("offline outbox and reconnect delivery", () => {
       expiresAt,
     });
     repo.updateRequestStatus(req.id, "decided");
+    repo.updateRequestStatus(req.id, "dispatching");
 
     // Enqueue decision message
     repo.enqueue({
@@ -374,6 +377,8 @@ describe("offline outbox and reconnect delivery", () => {
         sessionId: "session-1",
         approved: true,
       },
+      requestId: "req-reconnect",
+      expiresAt,
     });
 
     // Connect client — register listener before connection opens
@@ -424,6 +429,8 @@ describe("offline outbox and reconnect delivery", () => {
         sessionId: "session-1",
         approved: true,
       },
+      requestId: "req-apply",
+      expiresAt,
     });
 
     const ws = new WebSocket(wsUrl(port, `?token=apply-token`));
@@ -487,6 +494,8 @@ describe("offline outbox and reconnect delivery", () => {
         sessionId: "session-1",
         approved: true,
       },
+      requestId: "req-dupapply",
+      expiresAt,
     });
 
     const ws = new WebSocket(wsUrl(port, `?token=dupapply-token`));
@@ -574,5 +583,274 @@ describe("health endpoints", () => {
     expect(resp.status).toBe(200);
     const body = await resp.json();
     expect(body.status).toBe("ok");
+  });
+});
+
+describe("dispatch expiry and terminal guards (H1)", () => {
+  it("does not dispatch expired outbox messages", async () => {
+    const client = repo.createClient("expired-outbox-token");
+    const pastExpiry = new Date(Date.now() - 60_000);
+
+    repo.enqueue({
+      idempotencyKey: "expired-outbox-key",
+      recipientId: client.id,
+      messageType: "decision",
+      payload: {
+        requestId: "req-expired",
+        clientId: client.id,
+        sessionId: "session-1",
+        approved: true,
+      },
+      requestId: "req-expired",
+      expiresAt: pastExpiry,
+    });
+
+    const ws = new WebSocket(wsUrl(port, `?token=expired-outbox-token`));
+
+    const received = await new Promise<unknown>((resolve) => {
+      const timer = setTimeout(() => resolve(null), 2000);
+      ws.on("message", (data) => {
+        const parsed = JSON.parse(data.toString());
+        if (parsed.type === "decision") {
+          clearTimeout(timer);
+          resolve(parsed);
+        }
+      });
+    });
+
+    expect(received).toBeNull();
+    ws.close();
+  });
+
+  it("does not dispatch for terminal request status", async () => {
+    const client = repo.createClient("terminal-dispatch-token");
+    const expiresAt = new Date(Date.now() + 60_000);
+
+    const req = repo.upsertRequest({
+      requestId: "req-terminal",
+      clientId: client.id,
+      sessionId: "session-1",
+      status: "pending",
+      expiresAt,
+    });
+    repo.updateRequestStatus(req.id, "decided");
+    repo.updateRequestStatus(req.id, "dispatching");
+
+    repo.enqueue({
+      idempotencyKey: "terminal-outbox-key",
+      recipientId: client.id,
+      messageType: "decision",
+      payload: {
+        requestId: "req-terminal",
+        clientId: client.id,
+        sessionId: "session-1",
+        approved: true,
+      },
+      requestId: "req-terminal",
+      expiresAt,
+    });
+
+    repo.updateRequestStatus(req.id, "applied");
+
+    const ws = new WebSocket(wsUrl(port, `?token=terminal-dispatch-token`));
+
+    const received = await new Promise<unknown>((resolve) => {
+      const timer = setTimeout(() => resolve(null), 2000);
+      ws.on("message", (data) => {
+        const parsed = JSON.parse(data.toString());
+        if (parsed.type === "decision") {
+          clearTimeout(timer);
+          resolve(parsed);
+        }
+      });
+    });
+
+    expect(received).toBeNull();
+    ws.close();
+  });
+
+  it("still dispatches nonterminal decision on reconnect", async () => {
+    const client = repo.createClient("valid-dispatch-token");
+    const expiresAt = new Date(Date.now() + 60_000);
+
+    const req = repo.upsertRequest({
+      requestId: "req-valid",
+      clientId: client.id,
+      sessionId: "session-1",
+      status: "pending",
+      expiresAt,
+    });
+    repo.updateRequestStatus(req.id, "decided");
+    repo.updateRequestStatus(req.id, "dispatching");
+
+    repo.enqueue({
+      idempotencyKey: "valid-outbox-key",
+      recipientId: client.id,
+      messageType: "decision",
+      payload: {
+        requestId: "req-valid",
+        clientId: client.id,
+        sessionId: "session-1",
+        approved: true,
+      },
+      requestId: "req-valid",
+      expiresAt,
+    });
+
+    const ws = new WebSocket(wsUrl(port, `?token=valid-dispatch-token`));
+
+    const msg = await new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("timeout")), 3000);
+      ws.on("message", (data) => {
+        const parsed = JSON.parse(data.toString());
+        if (parsed.type === "decision") {
+          clearTimeout(timer);
+          resolve(parsed);
+        }
+      });
+    });
+
+    expect(msg).toBeDefined();
+    const parsed = msg as Record<string, unknown>;
+    expect(parsed.type).toBe("decision");
+    ws.close();
+  });
+});
+
+describe("readiness reflects real state (M3)", () => {
+  it("/health/ready returns 503 when DB is not ready", async () => {
+    const { setDbReady, setBotReady } = await import("../src/health.js");
+    setDbReady(false);
+    setBotReady(false);
+
+    const resp = await fetch(`http://127.0.0.1:${port}/health/ready`);
+    expect(resp.status).toBe(503);
+    const body = await resp.json();
+    expect(body.status).toBe("error");
+    expect(body.dbReady).toBe(false);
+
+    setDbReady(true);
+    setBotReady(true);
+  });
+
+  it("/health/ready returns 503 when bot is not ready", async () => {
+    const { setDbReady, setBotReady } = await import("../src/health.js");
+    setDbReady(true);
+    setBotReady(false);
+
+    const resp = await fetch(`http://127.0.0.1:${port}/health/ready`);
+    expect(resp.status).toBe(503);
+    const body = await resp.json();
+    expect(body.status).toBe("error");
+    expect(body.botReady).toBe(false);
+
+    setDbReady(true);
+    setBotReady(true);
+  });
+});
+
+describe("apply_result idempotency (H2)", () => {
+  it("handleApplyAcknowledgement cleans up pending outbox without dead code path", async () => {
+    const client = repo.createClient("cleanup-ack-token");
+    const expiresAt = new Date(Date.now() + 60_000);
+
+    const req = repo.upsertRequest({
+      requestId: "req-cleanup",
+      clientId: client.id,
+      sessionId: "session-1",
+      status: "pending",
+      expiresAt,
+    });
+    repo.updateRequestStatus(req.id, "decided");
+    repo.updateRequestStatus(req.id, "dispatching");
+
+    repo.enqueue({
+      idempotencyKey: "cleanup-ack-key-1",
+      recipientId: client.id,
+      messageType: "decision",
+      payload: {
+        requestId: "req-cleanup",
+        clientId: client.id,
+        sessionId: "session-1",
+        approved: true,
+      },
+      requestId: "req-cleanup",
+      expiresAt,
+    });
+
+    repo.enqueue({
+      idempotencyKey: "cleanup-ack-key-2",
+      recipientId: client.id,
+      messageType: "decision",
+      payload: {
+        requestId: "req-cleanup",
+        clientId: client.id,
+        sessionId: "session-1",
+        approved: false,
+      },
+      requestId: "req-cleanup",
+      expiresAt,
+    });
+
+    const ws = new WebSocket(wsUrl(port, `?token=cleanup-ack-token`));
+
+    let decisionCount = 0;
+    let ackSent = false;
+    ws.on("message", (raw) => {
+      const parsed = JSON.parse(raw.toString());
+      if (parsed.type === "decision" && !ackSent) {
+        decisionCount++;
+        ackSent = true;
+        ws.send(JSON.stringify(clientMsg("apply_result", {
+          requestId: "req-cleanup",
+          clientId: client.id,
+          sessionId: "session-1",
+          success: true,
+        })));
+      }
+    });
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => resolve(), 3000);
+      ws.on("close", () => { clearTimeout(timer); resolve(); });
+      ws.on("open", () => {});
+    });
+
+    // Both outbox entries should be cleaned up
+    const pending = repo.dequeuePending(10);
+    const stillPending = pending.filter(
+      (p) => p.recipientId === client.id,
+    );
+    expect(stillPending.length).toBe(0);
+    ws.close();
+  });
+});
+
+describe("WSS max frame payload (M1)", () => {
+  it("rejects oversized frame before JSON parsing at configured limit", async () => {
+    const client = repo.createClient("frame-limit-token");
+    const ws = new WebSocket(wsUrl(port, `?token=frame-limit-token`));
+    await new Promise<void>((resolve) => { ws.on("open", () => resolve()); });
+
+    const huge = clientMsg("request_upsert", {
+      clientId: client.id,
+      sessionId: "session-1",
+      requestId: "req-framelimit",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      question: {
+        text: "x".repeat(200_000),
+        options: [{ label: "Yes", value: "yes" }],
+      },
+    });
+
+    ws.send(JSON.stringify(huge));
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => resolve(), 5000);
+      ws.on("close", () => { clearTimeout(timer); resolve(); });
+      ws.on("message", () => {});
+    });
+
+    expect(ws.readyState).toBe(WebSocket.CLOSED);
   });
 });
