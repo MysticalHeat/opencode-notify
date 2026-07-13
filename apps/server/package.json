@@ -12,8 +12,11 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@fastify/websocket": "^11.3.0",
     "@repo/core": "*",
-    "better-sqlite3": "^12.11.1"
+    "better-sqlite3": "^12.11.1",
+    "fastify": "^5.10.0",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

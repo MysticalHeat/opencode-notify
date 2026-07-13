@@ -10,6 +10,9 @@ export interface PairingService {
     telegramUserId: number,
     onTokenGenerated: (token: string, client: ClientRow) => Promise<void>,
   ): Promise<{ success: boolean; clientId?: string; error?: string }>;
+  confirmPairingFromWs(
+    code: string,
+  ): { success: boolean; clientId?: string; token?: string; error?: string };
   revokeClient(clientId: string, telegramUserId: number): boolean;
   listClients(telegramUserId: number): ClientRow[];
 }
@@ -186,6 +189,35 @@ export function createPairingService(
         throw new Error("unauthorized: not an authorized user");
       }
       return repo.listAllClients();
+    },
+
+    confirmPairingFromWs(
+      code: string,
+    ): { success: boolean; clientId?: string; token?: string; error?: string } {
+      const pairingCode = repo.findPairingCodeByCode(code);
+      if (!pairingCode) {
+        return { success: false, error: "invalid pairing code" };
+      }
+
+      if (new Date(pairingCode.expiresAt).getTime() <= Date.now()) {
+        return { success: false, error: "pairing code expired" };
+      }
+
+      if (pairingCode.consumed === 1) {
+        return { success: false, error: "pairing code already consumed" };
+      }
+
+      const clientId = randomUUID();
+      const token = generateClientToken();
+
+      const consumed = repo.consumePairingCode(code, clientId);
+      if (!consumed) {
+        return { success: false, error: "pairing code already consumed" };
+      }
+
+      repo.createClientWithId(clientId, token);
+
+      return { success: true, clientId, token };
     },
   };
 }
