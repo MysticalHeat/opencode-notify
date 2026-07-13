@@ -1,0 +1,56 @@
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: apps/server/Dockerfile
+    image: opencode-notify:latest
+    container_name: opencode-notify
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:exec
+    ports:
+      - "3000:3000"
+      # Uncomment when switching to webhook (see docs/operations.md):
+      # - "8443:8443"
+    environment:
+      SERVER_HOST: "0.0.0.0"
+      SERVER_PORT: "3000"
+      PUBLIC_BASE_URL: "https://relay.example.com"
+      DATABASE_PATH: "/data/opencode-notify.db"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_USER_ID: "${TELEGRAM_USER_ID:-}"
+      LOGGING_LEVEL: "info"
+      # Uncomment for webhook mode (see docs/operations.md):
+      # WEBHOOK_HOST: "0.0.0.0"
+      # WEBHOOK_PORT: "8443"
+      # TELEGRAM_WEBHOOK_SECRET: "${TELEGRAM_WEBHOOK_SECRET:-}"
+    volumes:
+      - relay-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # ── Traefik reverse proxy (uncomment and customize) ──
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.http.routers.opencode-notify.rule=Host(`relay.example.com`)"
+    #   - "traefik.http.routers.opencode-notify.tls=true"
+    #   - "traefik.http.routers.opencode-notify.tls.certresolver=letsencrypt"
+    #   - "traefik.http.services.opencode-notify.loadbalancer.server.port=3000"
+    #
+    # When using a separate Traefik network, uncomment:
+    # networks:
+    #   - traefik-public
+
+volumes:
+  relay-data:
+
+# ── External Traefik network (uncomment if needed) ──
+# networks:
+#   traefik-public:
+#     external: true

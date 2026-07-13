@@ -58,9 +58,9 @@ jobs:
         run: node scripts/validate-workflows.mjs
 
   docker-smoke:
-    name: Docker Build Smoke
+    name: Docker Smoke Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build Docker image
-        run: docker build -t opencode-notify:ci .
+      - name: Run smoke test
+        run: bash scripts/docker-smoke.sh

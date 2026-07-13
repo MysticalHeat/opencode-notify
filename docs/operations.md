@@ -209,6 +209,100 @@ state appears stale:
 
 ---
 
+## Deploying the relay server
+
+### Container image
+
+Build the image from `apps/server/Dockerfile`:
+
+```bash
+docker build -t opencode-notify:latest -f apps/server/Dockerfile .
+```
+
+The image runs as a non-root user (`appuser`), uses `tini` as the init
+process, and exposes port 3000.  All persistent data (SQLite) lives under
+`/data` — mount a volume at this path.
+
+See `deploy/compose.example.yml` for a ready-to-customize Docker Compose
+configuration with commented Traefik labels and webhook guidance.
+
+### Fake Telegram mode
+
+Set `TELEGRAM_BOT_TOKEN=FAKE` to start the server without a real Telegram
+bot.  The HTTP API and WebSocket relay will be active, but no Telegram
+messages will be sent or received.  Useful for readiness probes, integration
+testing, and smoke tests.
+
+---
+
+## Switching from long-polling to webhook
+
+The server starts in **long-polling** mode by default (the grammY `bot.start()`
+loop).  Switching to **webhook** mode requires a coordinated change.
+
+### When to switch
+
+Webhooks reduce latency and are preferred in production when the relay is
+behind a reverse proxy (e.g. Traefik, nginx, Caddy) with a public HTTPS
+endpoint.
+
+### Migration procedure
+
+1. **Deploy the server with polling enabled** (default).  Verify it is
+   receiving updates normally.
+
+2. **Configure the webhook environment variables** (see
+   `apps/server/.env.example`):
+   - `WEBHOOK_HOST` — interface to bind the webhook listener on
+   - `WEBHOOK_PORT` — port for the webhook listener
+   - `TELEGRAM_WEBHOOK_SECRET` — a random secret shared with Telegram
+
+3. **Set up the webhook endpoint on the reverse proxy.**  Expose
+   `WEBHOOK_PORT` (default `8443`) on the public hostname.  The webhook
+   handler expects the `X-Telegram-Bot-Api-Secret-Token` header.
+
+4. **IMPORTANT: Stop polling before calling `setWebhook`.**  The grammY
+   long-polling client and webhook handler must not be active
+   simultaneously — concurrent delivery causes duplicate updates and
+   undefined behavior.
+
+   At present, the server always starts long-polling.  Webhook mode is not
+   yet activated in the application code.  When it is enabled in a future
+   release, stopping polling will require a configuration toggle or a
+   separate deployment.
+
+5. **Call `setWebhook` on the Telegram Bot API** to register the webhook URL:
+
+   ```bash
+   curl -s "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+     -d "url=https://relay.example.com/telegram/webhook" \
+     -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+   ```
+
+6. **Verify** the webhook is active:
+
+   ```bash
+   curl -s "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
+   ```
+
+   The response should list the pending update count and the configured URL.
+
+7. **Monitor** for errors.  If delivery fails, Telegram will retry with
+   exponential backoff.  Check the server logs and adjust firewall/proxy
+   rules if needed.
+
+### Rollback to polling
+
+1. Delete the webhook: `curl "https://api.telegram.org/bot<TOKEN>/deleteWebhook?drop_pending_updates=true"`
+2. Remove `WEBHOOK_HOST`, `WEBHOOK_PORT`, and `TELEGRAM_WEBHOOK_SECRET`
+   from the environment.
+3. Restart the server — it will resume long-polling.
+
+Note: `drop_pending_updates=true` discards updates queued during the
+transition to avoid replay storms.
+
+---
+
 ## Environment variable overrides
 
 See [configuration.md](./configuration.md) for the full configuration
