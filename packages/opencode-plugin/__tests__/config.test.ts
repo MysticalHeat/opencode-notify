@@ -39,7 +39,7 @@ function createMemFs(
 			if (opts?.failWriteTo && path.includes(opts.failWriteTo)) {
 				throw Object.assign(new Error("Write failed"), { code: "EIO" })
 			}
-			files.set(path, { content: data, mode: options?.mode ?? 0o644 })
+			files.set(path, { content: data, mode: options?.mode ?? 0o600 })
 		},
 		async stat(path: string) {
 			const entry = files.get(path)
@@ -65,6 +65,10 @@ function createMemFs(
 		},
 		async access(path: string) {
 			if (!files.has(path)) throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" })
+		},
+		async mkdir(_path: string, _options?: { recursive?: boolean }) {
+			void _path
+			void _options
 		},
 	}
 }
@@ -96,15 +100,24 @@ describe("loadConfig", () => {
 
 		it("uses custom env path when provided", async () => {
 			const memfs = createMemFs({
-				"/custom/config.json": jsonEntry({
+				"/home/testuser/.config/opencode/custom.json": jsonEntry({
 					desktop: { notifyChildSessions: true },
 				}),
 			})
 			const os = createMockOs()
 
-			const cfg = await loadConfig({ fs: memfs, os, envPath: "/custom/config.json" })
+			const cfg = await loadConfig({ fs: memfs, os, envPath: "/home/testuser/.config/opencode/custom.json" })
 
 			expect(cfg.desktop?.notifyChildSessions).toBe(true)
+		})
+
+		it("rejects env path outside home", async () => {
+			const memfs = createMemFs()
+			const os = createMockOs()
+
+			await expect(
+				loadConfig({ fs: memfs, os, envPath: "/etc/passwd" }),
+			).rejects.toThrow(ConfigError)
 		})
 	})
 
@@ -243,6 +256,39 @@ describe("loadConfig", () => {
 			const memfs = createMemFs({
 				[CONFIG_PATH]: jsonEntry({
 					desktop: { quietHours: { end: "abc" } },
+				}),
+			})
+			const os = createMockOs()
+
+			await expect(loadConfig({ fs: memfs, os })).rejects.toThrow(ValidationError)
+		})
+
+		it("throws ValidationError for non-string desktop sound value", async () => {
+			const memfs = createMemFs({
+				[CONFIG_PATH]: jsonEntry({
+					desktop: { sounds: { idle: 123 } },
+				}),
+			})
+			const os = createMockOs()
+
+			await expect(loadConfig({ fs: memfs, os })).rejects.toThrow(ValidationError)
+		})
+
+		it("throws ValidationError for non-string relay clientMetadata sound value", async () => {
+			const memfs = createMemFs({
+				[CONFIG_PATH]: jsonEntry({
+					relay: { clientMetadata: { sounds: { error: true } } },
+				}),
+			})
+			const os = createMockOs()
+
+			await expect(loadConfig({ fs: memfs, os })).rejects.toThrow(ValidationError)
+		})
+
+		it("throws ValidationError for non-boolean relay quietHours enabled", async () => {
+			const memfs = createMemFs({
+				[CONFIG_PATH]: jsonEntry({
+					relay: { clientMetadata: { quietHours: { enabled: "yes" } } },
 				}),
 			})
 			const os = createMockOs()
@@ -402,6 +448,42 @@ describe("writeConfig", () => {
 			expect(tempFiles).toHaveLength(0)
 		})
 
+		it("uses 0600 as default mode in memfs writeFile", async () => {
+			const memfs = createMemFs()
+			const os = createMockOs()
+
+			await writeConfig({}, { fs: memfs, os })
+
+			const entry = memfs.files.get(CONFIG_PATH)
+			expect(entry).toBeDefined()
+			expect(entry!.mode & 0o777).toBe(0o600)
+		})
+
+		it("creates parent directory when missing", async () => {
+			const memfs = createMemFs()
+			const os = createMockOs()
+			const customPath = "/home/testuser/.config/opencode/nested/deep/config.json"
+
+			await writeConfig({}, { fs: memfs, os, envPath: customPath })
+
+			const entry = memfs.files.get(customPath)
+			expect(entry).toBeDefined()
+			expect(entry!.mode & 0o777).toBe(0o600)
+		})
+
+		it("succeeds when parent directory already exists", async () => {
+			const memfs = createMemFs({
+				[CONFIG_PATH]: jsonEntry({ version: 1 }),
+			})
+			const os = createMockOs()
+
+			await writeConfig({ relay: { url: "https://updated.example.com" } }, { fs: memfs, os })
+
+			const entry = memfs.files.get(CONFIG_PATH)
+			expect(entry).toBeDefined()
+			expect(JSON.parse(entry!.content).relay.url).toBe("https://updated.example.com")
+		})
+
 		it("cleans up temp file after rename failure", async () => {
 			const memfs = createMemFs({}, { failRenameFrom: ".tmp" })
 			const os = createMockOs()
@@ -518,13 +600,22 @@ describe("ensureConfigMode", () => {
 
 	it("uses custom env path for mode check", async () => {
 		const memfs = createMemFs({
-			"/custom/config.json": { content: "{}", mode: 0o644 },
+			"/home/testuser/.config/opencode/custom.json": { content: "{}", mode: 0o644 },
 		})
 		const os = createMockOs()
-		const fixed = await ensureConfigMode({ fs: memfs, os, envPath: "/custom/config.json" })
+		const fixed = await ensureConfigMode({ fs: memfs, os, envPath: "/home/testuser/.config/opencode/custom.json" })
 
 		expect(fixed).toBe(true)
-		expect(memfs.files.get("/custom/config.json")!.mode & 0o777).toBe(0o600)
+		expect(memfs.files.get("/home/testuser/.config/opencode/custom.json")!.mode & 0o777).toBe(0o600)
+	})
+
+	it("rejects env path outside home for mode check", async () => {
+		const memfs = createMemFs()
+		const os = createMockOs()
+
+		await expect(
+			ensureConfigMode({ fs: memfs, os, envPath: "/tmp/config.json" }),
+		).rejects.toThrow(ConfigError)
 	})
 })
 
@@ -820,11 +911,33 @@ describe("configPath", () => {
 		expect(path).toBe(CONFIG_PATH)
 	})
 
-	it("uses env path override when provided", () => {
+	it("uses env path override under home", () => {
 		const os = createMockOs()
-		const path = configPath(os, "/custom/path/config.json")
+		const path = configPath(os, "/home/testuser/.config/opencode/custom.json")
 
-		expect(path).toBe("/custom/path/config.json")
+		expect(path).toBe("/home/testuser/.config/opencode/custom.json")
+	})
+
+	it("uses env path override at home root", () => {
+		const os = createMockOs()
+		const path = configPath(os, "/home/testuser/my-config.json")
+
+		expect(path).toBe("/home/testuser/my-config.json")
+	})
+
+	it("rejects env path outside home directory", () => {
+		const os = createMockOs()
+		expect(() => configPath(os, "/etc/config.json")).toThrow(ConfigError)
+	})
+
+	it("rejects env path in /tmp", () => {
+		const os = createMockOs()
+		expect(() => configPath(os, "/tmp/config.json")).toThrow(ConfigError)
+	})
+
+	it("rejects env path using traversal outside home", () => {
+		const os = createMockOs()
+		expect(() => configPath(os, "/home/testuser/../../etc/config.json")).toThrow(ConfigError)
 	})
 })
 

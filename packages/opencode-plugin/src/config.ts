@@ -44,6 +44,7 @@ export interface FsAbstraction {
 	rename(oldPath: string, newPath: string): Promise<void>
 	unlink(path: string): Promise<void>
 	access(path: string): Promise<void>
+	mkdir(path: string, options?: { recursive?: boolean }): Promise<void>
 }
 
 export interface OsAbstraction {
@@ -72,6 +73,9 @@ const defaultFs: FsAbstraction = {
 	},
 	async access(path: string) {
 		await fs.access(path)
+	},
+	async mkdir(path: string, options?: { recursive?: boolean }) {
+		await fs.mkdir(path, { recursive: options?.recursive ?? true })
 	},
 }
 
@@ -170,8 +174,18 @@ function validateConfig(input: unknown, label: string): OpenCodeNotifyConfig {
 					if (cm.notifyChildSessions !== undefined && typeof cm.notifyChildSessions !== "boolean") {
 						errors.push("relay.clientMetadata.notifyChildSessions must be a boolean")
 					}
+					if (cm.sounds !== undefined && isRecord(cm.sounds)) {
+						for (const [key, val] of Object.entries(cm.sounds as Record<string, unknown>)) {
+							if (typeof val !== "string") {
+								errors.push(`relay.clientMetadata.sounds.${key} must be a string`)
+							}
+						}
+					}
 					if (cm.quietHours !== undefined && isRecord(cm.quietHours)) {
 						const qh = cm.quietHours as Record<string, unknown>
+						if (qh.enabled !== undefined && typeof qh.enabled !== "boolean") {
+							errors.push("relay.clientMetadata.quietHours.enabled must be a boolean")
+						}
 						if (qh.start !== undefined && typeof qh.start === "string" && !isValidTimeFormat(qh.start)) {
 							errors.push("relay.clientMetadata.quietHours.start must be HH:MM")
 						}
@@ -191,6 +205,13 @@ function validateConfig(input: unknown, label: string): OpenCodeNotifyConfig {
 			const d = cfg.desktop as Record<string, unknown>
 			if (d.notifyChildSessions !== undefined && typeof d.notifyChildSessions !== "boolean") {
 				errors.push("desktop.notifyChildSessions must be a boolean")
+			}
+			if (d.sounds !== undefined && isRecord(d.sounds)) {
+				for (const [key, val] of Object.entries(d.sounds as Record<string, unknown>)) {
+					if (typeof val !== "string") {
+						errors.push(`desktop.sounds.${key} must be a string`)
+					}
+				}
 			}
 			if (d.quietHours !== undefined && isRecord(d.quietHours)) {
 				const qh = d.quietHours as Record<string, unknown>
@@ -233,7 +254,16 @@ function deepMerge(
 }
 
 export function configPath(os: OsAbstraction = defaultOs, envPath?: string): string {
-	if (envPath) return resolve(envPath)
+	if (envPath) {
+		const resolved = resolve(envPath)
+		const home = resolve(os.homedir())
+		if (!resolved.startsWith(home + "/") && resolved !== home) {
+			throw new ConfigError(
+				`OPENCODE_NOTIFY_CONFIG_PATH must be under the user home directory (${home}), got: ${resolved}`,
+			)
+		}
+		return resolved
+	}
 	return resolve(os.homedir(), ".config", "opencode", "opencode-notify.json")
 }
 
@@ -299,6 +329,7 @@ export async function writeConfig(
 	const json = JSON.stringify(merged, null, 2)
 
 	try {
+		await f.mkdir(dir, { recursive: true })
 		await f.writeFile(tmpPath, json, { mode: 0o600 })
 
 		try {
