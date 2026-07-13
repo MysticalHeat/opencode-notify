@@ -1,12 +1,38 @@
-import {
-	createOpencodeClient as createV2Client,
-} from "@opencode-ai/sdk/v2"
 import type { OpencodeClient as OpencodeClientType } from "@opencode-ai/sdk/v2"
 
 export type OpencodeClient = OpencodeClientType
 
-export function createOpencodeClient(serverUrl: URL): OpencodeClient {
-	return createV2Client({ baseUrl: serverUrl.toString() }) as unknown as OpencodeClient
+type CreateV2ClientFn = (opts: { baseUrl: string }) => unknown
+
+let _createV2Client: CreateV2ClientFn | null | undefined
+
+async function loadSdkV2(): Promise<CreateV2ClientFn> {
+	if (_createV2Client) return _createV2Client
+	if (_createV2Client === null) {
+		throw new Error(
+			"@opencode-ai/sdk v2 is required to create an OpenCode client. " +
+				"Install it with: npm install @opencode-ai/sdk",
+		)
+	}
+	try {
+		const sdk = await import("@opencode-ai/sdk/v2")
+		_createV2Client = sdk.createOpencodeClient
+	} catch {
+		_createV2Client = null
+	}
+	const fn = _createV2Client
+	if (!fn) {
+		throw new Error(
+			"@opencode-ai/sdk v2 is required to create an OpenCode client. " +
+				"Install it with: npm install @opencode-ai/sdk",
+		)
+	}
+	return fn
+}
+
+export async function createOpencodeClient(serverUrl: URL | string): Promise<OpencodeClient> {
+	const createV2 = await loadSdkV2()
+	return createV2({ baseUrl: typeof serverUrl === "string" ? serverUrl : serverUrl.toString() }) as unknown as OpencodeClient
 }
 
 export type ApplyResult = "applied" | "expired" | "failed"
