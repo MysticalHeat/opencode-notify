@@ -29,10 +29,18 @@ export interface RelayClientOptions {
 	maxReconnectDelayMs?: number
 }
 
+interface QueuedApplyResult {
+	requestId: string
+	success: boolean
+	error?: string
+}
+
 const DEFAULT_HEARTBEAT_MS = 30_000
 const DEFAULT_MAX_RECONNECT_MS = 120_000
 const BASE_RECONNECT_MS = 1000
 const JITTER_FACTOR = 0.3
+const DECISION_DEDUPE_TTL_MS = 5 * 60 * 1000
+const DECISION_DEDUPE_MAX_ENTRIES = 1000
 
 export class RelayClient {
 	private ws: WebSocket | null = null
@@ -41,8 +49,11 @@ export class RelayClient {
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 	private reconnectAttempt = 0
 	private shutdownRequested = false
-	private seenDecisions = new Set<string>()
-	private pendingUpserts = new Set<string>()
+	private seenDecisions = new Map<string, number>()
+	private pendingUpserts = new Map<string, UpsertEvent>()
+	private pendingApplyResults: QueuedApplyResult[] = []
+	private messageListener: ((event: MessageEvent) => void) | null = null
+	private closeListener: ((event: CloseEvent) => void) | null = null
 
 	readonly url: string
 	readonly clientToken: string
@@ -77,16 +88,18 @@ export class RelayClient {
 	shutdown(): void {
 		this.shutdownRequested = true
 		this.clearTimers()
+		this.removeListeners()
 		this.setStatus("shutdown")
 		if (this.ws) {
 			try { this.ws.close(1000, "client shutdown") } catch { /* ignore */ }
 			this.ws = null
 		}
+		this.pendingApplyResults = []
 	}
 
 	sendUpsert(event: UpsertEvent): void {
 		if (this.status !== "paired") {
-			this.pendingUpserts.add(event.requestId)
+			this.pendingUpserts.set(event.requestId, event)
 			return
 		}
 		const msg = buildUpsertMessage(event, this.genMessageId())
@@ -107,7 +120,11 @@ export class RelayClient {
 		success: boolean,
 		error?: string,
 	): Promise<void> {
-		if (this.status !== "paired") return
+		if (this.shutdownRequested) return
+		if (this.status !== "paired") {
+			this.pendingApplyResults.push({ requestId, success, error })
+			return
+		}
 		const msg = {
 			protocolVersion: 1 as const,
 			messageId: this.genMessageId(),
@@ -126,53 +143,89 @@ export class RelayClient {
 
 	flushPending(): void {
 		if (this.status !== "paired") return
-		for (const rid of this.pendingUpserts) {
-			this.sendUpsert({
-				requestId: rid,
-				clientId: this.clientId,
-				sessionId: this.sessionId,
-				expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
-			})
+		for (const event of this.pendingUpserts.values()) {
+			const msg = buildUpsertMessage(event, this.genMessageId())
+			this.sendJson(msg)
 		}
 		this.pendingUpserts.clear()
+		this.flushPendingApplyResults()
+	}
+
+	private flushPendingApplyResults(): void {
+		if (this.pendingApplyResults.length === 0) return
+		const results = this.pendingApplyResults.splice(0)
+		for (const ar of results) {
+			const msg = {
+				protocolVersion: 1 as const,
+				messageId: this.genMessageId(),
+				type: "apply_result" as const,
+				sentAt: new Date().toISOString(),
+				payload: {
+					requestId: ar.requestId,
+					clientId: this.clientId,
+					sessionId: this.sessionId,
+					success: ar.success,
+					error: ar.error,
+				},
+			}
+			this.sendJson(msg)
+		}
 	}
 
 	private establishConnection(): void {
+		this.removeListeners()
 		if (this.ws) {
 			try { this.ws.close() } catch { /* ignore */ }
 			this.ws = null
 		}
 
+		let ws: WebSocket
 		try {
-			this.ws = new WebSocket(this.url)
+			ws = new WebSocket(this.url)
 		} catch {
 			this.scheduleReconnect()
 			return
 		}
 
-		this.ws.addEventListener("open", () => {
-			this.reconnectAttempt = 0
-			this.sendHello()
-			setTimeout(() => this.sendPairing(), 50)
-		})
+		this.ws = ws
 
-		this.ws.addEventListener("message", (event) => {
+		this.messageListener = (event: MessageEvent) => {
 			this.handleMessage(event.data)
-		})
-
-		this.ws.addEventListener("close", (event) => {
+		}
+		this.closeListener = (event: CloseEvent) => {
 			this.clearHeartbeat()
 			this.ws = null
+			this.removeListeners()
 			if (this.shutdownRequested) return
 			if (event.code === 4001) {
 				this.setStatus("disconnected")
 				return
 			}
 			this.scheduleReconnect()
+		}
+
+		ws.addEventListener("open", () => {
+			this.reconnectAttempt = 0
+			this.sendHello()
+			setTimeout(() => this.sendPairing(), 50)
 		})
 
-		this.ws.addEventListener("error", () => {
+		ws.addEventListener("message", this.messageListener)
+		ws.addEventListener("close", this.closeListener)
+
+		ws.addEventListener("error", () => {
 		})
+	}
+
+	private removeListeners(): void {
+		if (this.ws && this.messageListener) {
+			try { this.ws.removeEventListener("message", this.messageListener) } catch { /* ignore */ }
+		}
+		if (this.ws && this.closeListener) {
+			try { this.ws.removeEventListener("close", this.closeListener) } catch { /* ignore */ }
+		}
+		this.messageListener = null
+		this.closeListener = null
 	}
 
 	private sendHello(): void {
@@ -230,6 +283,27 @@ export class RelayClient {
 		}
 	}
 
+	private addSeenDecision(key: string): boolean {
+		this.pruneSeenDecisions()
+		if (this.seenDecisions.has(key)) return false
+		this.seenDecisions.set(key, Date.now())
+		return true
+	}
+
+	private pruneSeenDecisions(): void {
+		const now = Date.now()
+		for (const [k, at] of this.seenDecisions) {
+			if (now - at > DECISION_DEDUPE_TTL_MS) this.seenDecisions.delete(k)
+		}
+		if (this.seenDecisions.size > DECISION_DEDUPE_MAX_ENTRIES) {
+			const entries = [...this.seenDecisions.entries()]
+			entries.sort((a, b) => a[1] - b[1])
+			for (let i = 0; i < entries.length - DECISION_DEDUPE_MAX_ENTRIES; i++) {
+				this.seenDecisions.delete(entries[i]![0])
+			}
+		}
+	}
+
 	private handleMessage(data: unknown): void {
 		let raw: unknown
 		try {
@@ -262,9 +336,12 @@ export class RelayClient {
 				break
 			case "decision": {
 				const key = `${msg.payload.requestId}:${msg.messageId}`
-				if (this.seenDecisions.has(key)) return
-				this.seenDecisions.add(key)
-				this.onDecision(msg)
+				if (!this.addSeenDecision(key)) return
+				try {
+					this.onDecision(msg)
+				} catch {
+					/* callback exception must not escape handler */
+				}
 				break
 			}
 			case "error":

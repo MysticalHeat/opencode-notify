@@ -19,7 +19,7 @@ function getProps(event: { properties?: unknown }): Record<string, unknown> | un
 }
 
 function getSessionID(props: Record<string, unknown>): string {
-	return toText(props.sessionID) ?? toText(props.sessionId) ?? toText(props.id) ?? "unknown"
+	return toText(props.sessionID) ?? toText(props.sessionId) ?? "unknown"
 }
 
 function getRequestID(props: Record<string, unknown>): string | undefined {
@@ -132,6 +132,14 @@ export function eventToUpsert(
 	}
 }
 
+function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
+	const result: Record<string, unknown> = {}
+	for (const [k, v] of Object.entries(obj)) {
+		if (v !== undefined) result[k] = v
+	}
+	return result as T
+}
+
 export function buildUpsertMessage(
 	event: UpsertEvent,
 	messageId: string,
@@ -141,14 +149,14 @@ export function buildUpsertMessage(
 		messageId,
 		type: "request_upsert",
 		sentAt: new Date().toISOString(),
-		payload: {
+		payload: stripUndefined({
 			clientId: event.clientId,
 			sessionId: event.sessionId,
 			requestId: event.requestId,
 			expiresAt: event.expiresAt,
 			question: event.question,
 			permission: event.permission,
-		},
+		}),
 	}
 }
 
