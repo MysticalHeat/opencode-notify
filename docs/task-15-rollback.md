@@ -38,14 +38,16 @@ Then restart OpenCode.
 | `npm test` | PASS (284 plugin + 168 server = 452 total) |
 | `npm pack --workspace=@nomli/opencode-notify --dry-run` | PASS — tarball contains only dist/, LICENSE, README.md, package.json |
 | ESM import of dist/index.js | PASS — all 45 exports verified |
+| Live OpenCode question event after restart | PASS — desktop notification appeared with relay disabled |
 
 ## Limitations
 
 - OpenCode restart requires manual user action — not automated.
 - GitHub Packages switch deferred until package is published and auth configured.
 - Server deployment and webhook activation not performed.
+- Pairing, permission, question-response, relay outage, and reconnect flows remain covered by automated E2E tests; they require a deployed relay for live acceptance.
 - Lint warnings in `@repo/server` (pre-existing, not related to plugin migration).
 
 ## Timestamp
 
-2025-07-13T17:31+05:00
+2026-07-13T17:31+05:00
