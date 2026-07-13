@@ -11,17 +11,25 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "dependencies": {
-    "@repo/protocol": "*"
+    "node-notifier": "^10.0.1"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
   },
   "devDependencies": {
+    "@opencode-ai/plugin": "^1.17.18",
+    "@opencode-ai/sdk": "*",
+    "@repo/protocol": "*",
     "tsup": "^8.5.0",
     "typescript": "^5.8.0",
     "vitest": "^3.2.0"
