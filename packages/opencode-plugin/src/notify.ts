@@ -302,8 +302,13 @@ export function createNotifyPlugin(
 	return async (input: PluginInput) => {
 		const tracker = createDedupeTracker()
 		const terminalInfo = await detectTerminalInfo(terminalDeps)
+		const relayBridge = deps?.relayBridge
+
+		relayBridge?.start?.()
 
 		async function handleEvent(event: EventLike): Promise<void> {
+			void relayBridge?.handleEvent(event as { type?: string; properties?: unknown })
+
 			const normalizedType = normalizeEventType(event)
 			if (!normalizedType) return
 

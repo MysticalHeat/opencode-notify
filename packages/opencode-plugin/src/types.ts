@@ -1,5 +1,6 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
+import type { IRelayBridge } from "./relay-bridge.js"
 
 export type NotifyEventType =
 	| "tool.execute.before"
@@ -76,6 +77,7 @@ export interface NotifyDeps {
 	spawnProcess?: SpawnProcess
 	env?: EnvironmentVariables
 	terminal?: TerminalDetectDeps
+	relayBridge?: IRelayBridge
 }
 
 export type EventLike = Event & { type?: string; properties?: unknown }

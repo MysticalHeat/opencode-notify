@@ -84,3 +84,6 @@ export {
 	createOpencodeClient,
 } from "./opencode-client.js"
 export type { ApplyResult, ApplyQuestionParams, ApplyPermissionParams, OpencodeClient as RelayOpencodeClient } from "./opencode-client.js"
+
+export { RelayBridge } from "./relay-bridge.js"
+export type { IRelayClient, IRelayBridge, RelayClientFactory, RelayBridgeDeps } from "./relay-bridge.js"
