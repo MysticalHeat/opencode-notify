@@ -6,8 +6,10 @@ import type {
 	EventLike,
 	SessionMetadata,
 	NotifyDeps,
+	TerminalDetectDeps,
 } from "./types.js"
 import { canUseCmuxNotification, sendCmuxNotification, sendDesktopNotification, sendNotificationWithFallback } from "./backend.js"
+import { detectTerminalInfo, shouldSuppressForFocus } from "./focus.js"
 
 const DEDUPE_WINDOW_MS = 1500
 
@@ -272,15 +274,34 @@ export async function shouldSkipChildSession(
 
 // ─── PLUGIN FACTORY ──────────────────────────────────────
 
+function defaultTerminalDeps(terminalOverrides?: TerminalDetectDeps): TerminalDetectDeps {
+	if (terminalOverrides) return terminalOverrides
+	return {
+		platform: typeof process !== "undefined" ? (process.platform ?? "linux") : "linux",
+		env: typeof process !== "undefined"
+			? (process.env as Record<string, string | undefined>)
+			: {},
+		runCommand: async () => {
+			throw new Error("runCommand not provided; inject via deps.terminal.runCommand")
+		},
+	}
+}
+
+function isDarwin(platform: string): boolean {
+	return platform === "darwin"
+}
+
 export function createNotifyPlugin(
 	configInput?: NotifyPluginConfig,
 	deps?: NotifyDeps,
 ): Plugin {
 	const config = mergeConfig(configInput)
 	const env = deps?.env ?? (typeof process !== "undefined" ? (process.env as Record<string, string | undefined>) : {})
+	const terminalDeps = defaultTerminalDeps(deps?.terminal)
 
 	return async (input: PluginInput) => {
 		const tracker = createDedupeTracker()
+		const terminalInfo = await detectTerminalInfo(terminalDeps)
 
 		async function handleEvent(event: EventLike): Promise<void> {
 			const normalizedType = normalizeEventType(event)
@@ -288,13 +309,14 @@ export function createNotifyPlugin(
 
 			if (config.quietHours?.enabled && inQuietHours({ start: config.quietHours.start ?? "22:00", end: config.quietHours.end ?? "08:00" })) return
 
-			const { skip: isChild } = await shouldSkipChildSession(normalizedType, event, config, input.client)
-			if (isChild) return
+			if (shouldSuppressForFocus(normalizedType, terminalInfo)) return
+
+			const { skip, session } = await shouldSkipChildSession(normalizedType, event, config, input.client)
+			if (skip) return
 
 			const key = dedupeKey(normalizedType, event)
 			if (!tracker.shouldSend(key)) return
 
-			const { session } = await shouldSkipChildSession(normalizedType, event, config, input.client)
 			const info = summarizeEvent(normalizedType, event, config, session)
 
 			await sendNotificationWithFallback({
@@ -310,6 +332,8 @@ export function createNotifyPlugin(
 						subtitle: info.context,
 						body: info.message,
 						sound: info.sound,
+						activate: isDarwin(terminalDeps.platform) && Boolean(terminalInfo.bundleId),
+						bundleId: isDarwin(terminalDeps.platform) ? terminalInfo.bundleId : undefined,
 					}),
 			})
 		}

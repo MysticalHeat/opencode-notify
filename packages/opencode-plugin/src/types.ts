@@ -56,10 +56,26 @@ export interface ChildProcessLike {
 
 export type SpawnProcess = (command: string[], options?: Record<string, unknown>) => ChildProcessLike
 
+export type RunCommand = (command: string[]) => Promise<string>
+
+export interface TerminalInfo {
+	terminal?: string
+	bundleId?: string
+	frontmostApp?: string
+	focused: boolean
+}
+
+export interface TerminalDetectDeps {
+	platform: string
+	env: EnvironmentVariables
+	runCommand: RunCommand
+}
+
 export interface NotifyDeps {
 	resolveExecutable?: ResolveExecutable
 	spawnProcess?: SpawnProcess
 	env?: EnvironmentVariables
+	terminal?: TerminalDetectDeps
 }
 
 export type EventLike = Event & { type?: string; properties?: unknown }

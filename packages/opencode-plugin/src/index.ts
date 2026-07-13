@@ -17,6 +17,13 @@ export {
 	buildCmuxNotifyArgs,
 	CMUX_NOTIFY_TIMEOUT_MS,
 } from "./backend.js"
+export {
+	shouldSuppressForFocus,
+	detectTerminalInfo,
+	isTerminalFocused,
+	getBundleId,
+	getFrontmostApp,
+} from "./focus.js"
 export { TimeoutError, withTimeout } from "./timeout.js"
 export type {
 	NotifyPluginConfig,
@@ -34,4 +41,7 @@ export type {
 	EnvironmentVariables,
 	ChildProcessLike,
 	OpencodeClient,
+	TerminalInfo,
+	TerminalDetectDeps,
+	RunCommand,
 } from "./types.js"
