@@ -80,6 +80,37 @@ export interface OutboxRow {
   expiresAt: string | null;
 }
 
+export interface CallbackIdRow {
+  actionId: string;
+  requestFk: string;
+  actionType: string;
+  payloadJson: string | null;
+  createdAt: string;
+  expiresAt: string;
+  claimedAt: string | null;
+}
+
+export interface FreplyTrackingRow {
+  id: string;
+  chatId: number;
+  userId: number;
+  replyMessageId: number;
+  requestFk: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface DecisionStateRow {
+  id: string;
+  requestFk: string;
+  chatId: number;
+  userId: number;
+  messageId: number;
+  selectedJson: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ─── Repository interface ─────────────────────────────────
 
 export interface Repository {
@@ -109,6 +140,7 @@ export interface Repository {
     requestId: string,
     clientId: string,
   ): RequestRow | undefined;
+  findRequestById(id: string): RequestRow | undefined;
   updateRequestStatus(id: string, status: RequestStatus): RequestRow;
   expireRequests(): number;
 
@@ -147,6 +179,43 @@ export interface Repository {
 
   // atomic compensation: delete client + unconsume pairing code in one transaction
   compensateCallbackFailure(clientId: string, code: string): boolean;
+
+  // callback IDs
+  createCallbackId(
+    actionId: string,
+    requestFk: string,
+    actionType: string,
+    expiresAt: Date,
+    payload: unknown,
+  ): CallbackIdRow;
+  findAndClaimCallbackId(actionId: string): CallbackIdRow | undefined;
+
+  // ForceReply tracking
+  createFreplyTracking(
+    chatId: number,
+    userId: number,
+    replyMessageId: number,
+    requestFk: string,
+    expiresAt: Date,
+  ): FreplyTrackingRow;
+  findFreplyTracking(
+    chatId: number,
+    userId: number,
+    replyMessageId: number,
+  ): FreplyTrackingRow | undefined;
+  deleteFreplyTracking(id: string): void;
+
+  // multi-select decision state
+  createDecisionState(
+    requestFk: string,
+    chatId: number,
+    userId: number,
+    messageId: number,
+    selectedValues: string[],
+  ): DecisionStateRow;
+  findDecisionState(requestFk: string, chatId: number, userId: number): DecisionStateRow | undefined;
+  updateDecisionState(id: string, selectedJson: string): void;
+  deleteDecisionState(id: string): void;
 }
 
 export interface UpsertRequestParams {
@@ -258,6 +327,43 @@ function mapOutbox(row: Record<string, unknown>): OutboxRow {
 function toIso(date: Date): string {
   // Store full ISO 8601 UTC text so new Date() roundtrips correctly
   return date.toISOString();
+}
+
+function mapCallbackId(row: Record<string, unknown>): CallbackIdRow {
+  return {
+    actionId: row.action_id as string,
+    requestFk: row.request_fk as string,
+    actionType: row.action_type as string,
+    payloadJson: (row.payload_json as string) ?? null,
+    createdAt: row.created_at as string,
+    expiresAt: row.expires_at as string,
+    claimedAt: (row.claimed_at as string) ?? null,
+  };
+}
+
+function mapFreply(row: Record<string, unknown>): FreplyTrackingRow {
+  return {
+    id: row.id as string,
+    chatId: row.chat_id as number,
+    userId: row.user_id as number,
+    replyMessageId: row.reply_message_id as number,
+    requestFk: row.request_fk as string,
+    createdAt: row.created_at as string,
+    expiresAt: row.expires_at as string,
+  };
+}
+
+function mapDecisionState(row: Record<string, unknown>): DecisionStateRow {
+  return {
+    id: row.id as string,
+    requestFk: row.request_fk as string,
+    chatId: row.chat_id as number,
+    userId: row.user_id as number,
+    messageId: row.message_id as number,
+    selectedJson: row.selected_json as string,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
 }
 
 const VALID_TRANSITIONS: Record<string, ReadonlySet<RequestStatus>> = {
@@ -438,6 +544,61 @@ export function createRepository(db: Database.Database): Repository {
     WHERE code = ?
   `);
 
+  // ── Callback IDs ─────────────────────────────────
+
+  const createCallbackIdStmt = db.prepare(`
+    INSERT INTO telegram_callback_ids (action_id, request_fk, action_type, payload_json, expires_at)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+
+  const findAndClaimCallbackIdStmt = db.prepare(`
+    UPDATE telegram_callback_ids
+    SET claimed_at = datetime('now')
+    WHERE action_id = ?
+      AND claimed_at IS NULL
+      AND datetime(expires_at) > datetime('now')
+    RETURNING *
+  `);
+
+  // ── ForceReply tracking ──────────────────────────
+
+  const createFreplyStmt = db.prepare(`
+    INSERT INTO telegram_freply_tracking (id, chat_id, user_id, reply_message_id, request_fk, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  const findFreplyStmt = db.prepare(`
+    SELECT * FROM telegram_freply_tracking
+    WHERE chat_id = ? AND user_id = ? AND reply_message_id = ?
+      AND datetime(expires_at) > datetime('now')
+  `);
+
+  const deleteFreplyStmt = db.prepare(`
+    DELETE FROM telegram_freply_tracking WHERE id = ?
+  `);
+
+  // ── Multi-select decision state ──────────────────
+
+  const createDecisionStateStmt = db.prepare(`
+    INSERT INTO telegram_decision_state (id, request_fk, chat_id, user_id, message_id, selected_json)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  const findDecisionStateStmt = db.prepare(`
+    SELECT * FROM telegram_decision_state
+    WHERE request_fk = ? AND chat_id = ? AND user_id = ?
+  `);
+
+  const updateDecisionStateStmt = db.prepare(`
+    UPDATE telegram_decision_state
+    SET selected_json = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `);
+
+  const deleteDecisionStateStmt = db.prepare(`
+    DELETE FROM telegram_decision_state WHERE id = ?
+  `);
+
   // ── Public API ───────────────────────────────────────
 
   return {
@@ -539,6 +700,11 @@ export function createRepository(db: Database.Database): Repository {
       const row = findRequestByFieldsStmt.get(requestId, clientId) as
         | Record<string, unknown>
         | undefined;
+      return row ? mapRequest(row) : undefined;
+    },
+
+    findRequestById(id: string): RequestRow | undefined {
+      const row = db.prepare("SELECT * FROM requests WHERE id = ?").get(id) as Record<string, unknown> | undefined;
       return row ? mapRequest(row) : undefined;
     },
 
@@ -743,6 +909,102 @@ export function createRepository(db: Database.Database): Repository {
         const delInfo = deleteClientStmt.run(clientId);
         const uncInfo = unconsumePairingCodeStmt.run(code);
         return delInfo.changes > 0 || uncInfo.changes > 0;
+      })();
+    },
+
+    // ── Callback IDs ───────────────────────────────
+
+    createCallbackId(
+      actionId: string,
+      requestFk: string,
+      actionType: string,
+      expiresAt: Date,
+      payload: unknown,
+    ): CallbackIdRow {
+      const payloadJson = JSON.stringify(payload);
+      const expiresStr = toIso(expiresAt);
+      return db.transaction(() => {
+        createCallbackIdStmt.run(actionId, requestFk, actionType, payloadJson, expiresStr);
+        return mapCallbackId(
+          db.prepare("SELECT * FROM telegram_callback_ids WHERE action_id = ?").get(actionId) as Record<string, unknown>,
+        );
+      })();
+    },
+
+    findAndClaimCallbackId(actionId: string): CallbackIdRow | undefined {
+      return db.transaction(() => {
+        const row = findAndClaimCallbackIdStmt.get(actionId) as Record<string, unknown> | undefined;
+        return row ? mapCallbackId(row) : undefined;
+      })();
+    },
+
+    // ── ForceReply tracking ────────────────────────
+
+    createFreplyTracking(
+      chatId: number,
+      userId: number,
+      replyMessageId: number,
+      requestFk: string,
+      expiresAt: Date,
+    ): FreplyTrackingRow {
+      const id = randomUUID();
+      const expiresStr = toIso(expiresAt);
+      return db.transaction(() => {
+        createFreplyStmt.run(id, chatId, userId, replyMessageId, requestFk, expiresStr);
+        return mapFreply(
+          db.prepare("SELECT * FROM telegram_freply_tracking WHERE id = ?").get(id) as Record<string, unknown>,
+        );
+      })();
+    },
+
+    findFreplyTracking(
+      chatId: number,
+      userId: number,
+      replyMessageId: number,
+    ): FreplyTrackingRow | undefined {
+      const row = findFreplyStmt.get(chatId, userId, replyMessageId) as Record<string, unknown> | undefined;
+      return row ? mapFreply(row) : undefined;
+    },
+
+    deleteFreplyTracking(id: string): void {
+      db.transaction(() => {
+        deleteFreplyStmt.run(id);
+      })();
+    },
+
+    // ── Multi-select decision state ────────────────
+
+    createDecisionState(
+      requestFk: string,
+      chatId: number,
+      userId: number,
+      messageId: number,
+      selectedValues: string[],
+    ): DecisionStateRow {
+      const id = randomUUID();
+      const selectedJson = JSON.stringify(selectedValues);
+      return db.transaction(() => {
+        createDecisionStateStmt.run(id, requestFk, chatId, userId, messageId, selectedJson);
+        return mapDecisionState(
+          db.prepare("SELECT * FROM telegram_decision_state WHERE id = ?").get(id) as Record<string, unknown>,
+        );
+      })();
+    },
+
+    findDecisionState(requestFk: string, chatId: number, userId: number): DecisionStateRow | undefined {
+      const row = findDecisionStateStmt.get(requestFk, chatId, userId) as Record<string, unknown> | undefined;
+      return row ? mapDecisionState(row) : undefined;
+    },
+
+    updateDecisionState(id: string, selectedJson: string): void {
+      db.transaction(() => {
+        updateDecisionStateStmt.run(selectedJson, id);
+      })();
+    },
+
+    deleteDecisionState(id: string): void {
+      db.transaction(() => {
+        deleteDecisionStateStmt.run(id);
       })();
     },
   };

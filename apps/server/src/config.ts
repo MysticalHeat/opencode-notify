@@ -4,7 +4,7 @@ export interface ServerConfig {
   server: { host: string; port: number };
   database: { path: string };
   telegram: { botToken: string; userId: number };
-  webhook?: { host: string; port: number };
+  webhook?: { host: string; port: number; secretToken?: string };
   publicBaseUrl: string;
 }
 
@@ -13,7 +13,7 @@ class Config implements ServerConfig {
   readonly database: { path: string };
   readonly #botToken: string;
   readonly #userId: number;
-  readonly webhook?: { host: string; port: number };
+  readonly webhook?: { host: string; port: number; secretToken?: string };
   readonly publicBaseUrl: string;
 
   constructor(env: Record<string, string | undefined>) {
@@ -32,6 +32,7 @@ class Config implements ServerConfig {
       this.webhook = {
         host: env.WEBHOOK_HOST,
         port: requiredInt(env, "WEBHOOK_PORT"),
+        secretToken: env.TELEGRAM_WEBHOOK_SECRET,
       };
     }
   }

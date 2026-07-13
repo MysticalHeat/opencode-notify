@@ -16,6 +16,7 @@
     "@repo/core": "*",
     "better-sqlite3": "^12.11.1",
     "fastify": "^5.10.0",
+    "grammy": "^1.44.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {
