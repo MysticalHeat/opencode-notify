@@ -1,4 +1,5 @@
 import type { Repository } from "../db/repository.js";
+import { transitionRequest } from "@repo/core";
 
 export interface CallbackResult {
   type: "permission" | "question" | "multi_toggle" | "multi_done" | "custom_text" | "unauthorized" | "stale" | "expired";
@@ -49,7 +50,32 @@ export function handleCallbackQuery(
     return { type: "stale" };
   }
 
-  if (req.status !== "pending") {
+  const next = transitionRequest(
+    {
+      requestId: req.requestId,
+      clientId: req.clientId,
+      sessionId: req.sessionId,
+      status: req.status,
+      expiresAt: new Date(req.expiresAt),
+    },
+    {
+      type: "DECISION",
+      requestId: req.requestId,
+      clientId: req.clientId,
+      sessionId: req.sessionId,
+    },
+    new Date(),
+  );
+
+  if (!next) {
+    return { type: "stale" };
+  }
+
+  if (next.status === "expired") {
+    return { type: "expired" };
+  }
+
+  if (next.status !== "decided" && next.status !== "rejected") {
     return { type: "stale" };
   }
 

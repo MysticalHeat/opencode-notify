@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Repository } from "../db/repository.js";
 import type { ConnectionRegistry } from "./connections.js";
 import type { DispatchService } from "./dispatch.js";
+import type { BotAdapter } from "../telegram/bot.js";
 
 interface GatewayOptions {
   repo: Repository;
@@ -20,6 +21,7 @@ interface GatewayOptions {
       error?: string;
     };
   };
+  botAdapter?: BotAdapter;
 }
 
 interface WsConnection {
@@ -33,7 +35,7 @@ function hashToken(token: string): string {
 }
 
 export function createGatewayHandler(options: GatewayOptions) {
-  const { repo, registry, dispatch, config, pairingService } = options;
+  const { repo, registry, dispatch, config, pairingService, botAdapter } = options;
 
   return function wsHandler(connection: WsConnection, request: { url?: string }): void {
     const url = new URL(request.url ?? "/", "ws://localhost");
@@ -201,7 +203,7 @@ export function createGatewayHandler(options: GatewayOptions) {
             payloadJson = JSON.stringify(permission);
           }
 
-          repo.upsertRequest({
+          const row = repo.upsertRequest({
             requestId,
             clientId: id,
             sessionId,
@@ -218,6 +220,10 @@ export function createGatewayHandler(options: GatewayOptions) {
             type: "heartbeat",
             payload: { clientId: id, sessionId },
           }));
+
+          if (botAdapter) {
+            botAdapter.postRequest(row).catch(() => {});
+          }
           break;
         }
 

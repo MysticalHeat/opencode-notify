@@ -126,7 +126,7 @@ function createCommandHandler(pairingService: PairingService) {
 
 // ─── Outbox integration ─────────────────────────────────
 
-function enqueueDecision(
+export function enqueueDecision(
   repo: Repository,
   result: { requestId: string; clientId: string; sessionId: string; approved?: boolean; always?: boolean; answerValue?: string; answerLabel?: string; selectedValues?: string[] },
   requestRow: RequestRow | undefined,

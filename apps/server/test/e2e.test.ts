@@ -11,28 +11,27 @@ import { createPairingService, type PairingService } from "../src/pairing/servic
 import type { AppConfig } from "../src/app.js";
 import type { FastifyInstance } from "fastify";
 import type { BotAdapter } from "../src/telegram/bot.js";
+import { handleCallbackQuery, type CallbackResult } from "../src/telegram/callbacks.js";
+import { enqueueDecision } from "../src/telegram/bot.js";
+
+const AUTHORIZED_USER_ID = 123456789;
+const CHAT_ID = 111111;
 
 // ─── Fake Bot ──────────────────────────────────────────
 
-interface PendingRequest {
-  requestRow: RequestRow;
-  resolve?: (decision: PendingDecision) => void;
-}
-
-interface PendingDecision {
+type SimCallbackParams = {
+  actionType: "question_select" | "permission_approve" | "permission_always" | "permission_reject";
   requestId: string;
   clientId: string;
   sessionId: string;
-  approved?: boolean;
-  always?: boolean;
-  answerValue?: string;
-  answerLabel?: string;
-  selectedValues?: string[];
-}
+  value?: string;
+  label?: string;
+};
 
 class FakeBotAdapter implements BotAdapter {
-  private requests: PendingRequest[] = [];
+  private requests: RequestRow[] = [];
   private repo: Repository;
+  private messageIdCounter = 100;
 
   constructor(repo: Repository) {
     this.repo = repo;
@@ -45,75 +44,59 @@ class FakeBotAdapter implements BotAdapter {
   }
 
   async postRequest(requestRow: RequestRow): Promise<{ messageId: number } | undefined> {
-    this.requests.push({ requestRow });
-    return { messageId: 1 };
+    this.requests.push(requestRow);
+    return { messageId: this.messageIdCounter++ };
   }
 
   get pendingCount(): number {
     return this.requests.length;
   }
 
+  reset(): void {
+    this.requests = [];
+  }
+
   /**
-   * Simulate a user decision (mimics what happens in callback handler).
-   * 1. Update request status to "decided"
-   * 2. Save answers if applicable
-   * 3. Enqueue decision in outbox (dispatch service delivers it)
+   * Drive a callback through the SAME handleCallbackQuery + enqueueDecision
+   * code path that production uses.  Creates a callback ID, claims it,
+   * transitions the request, and enqueues the decision for outbox dispatch.
    */
-  simulateDecision(decision: PendingDecision): void {
-    const req = this.repo.findRequestByRequestIdAndClient(decision.requestId, decision.clientId);
-    if (!req) throw new Error(`Request not found: ${decision.requestId}`);
-    if (req.status !== "pending") throw new Error(`Request ${decision.requestId} is not pending: ${req.status}`);
+  simulateCallback(params: SimCallbackParams): void {
+    const req = this.repo.findRequestByRequestIdAndClient(params.requestId, params.clientId);
+    if (!req) throw new Error(`Request not found: ${params.requestId}`);
 
-    const decided = this.repo.updateRequestStatus(req.id, "decided");
-    this.repo.updateRequestStatus(decided.id, "dispatching");
+    const actionId = `e2e-cb-${params.actionType}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const expiresAt = new Date(Date.now() + 60_000);
 
-    if (decision.approved !== undefined) {
-      this.repo.enqueue({
-        idempotencyKey: `e2e-decision-${decision.requestId}-${Date.now()}`,
-        recipientId: decision.clientId,
-        messageType: "decision",
-        payload: {
-          requestId: decision.requestId,
-          clientId: decision.clientId,
-          sessionId: decision.sessionId,
-          approved: decision.approved,
-          always: decision.always ?? false,
-        },
-        requestId: decision.requestId,
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-      });
-    } else if (decision.selectedValues !== undefined) {
-      const answers = decision.selectedValues.map((v) => ({ value: v, label: v }));
-      this.repo.saveAnswers(decided.id, answers);
-      this.repo.enqueue({
-        idempotencyKey: `e2e-decision-${decision.requestId}-${Date.now()}`,
-        recipientId: decision.clientId,
-        messageType: "decision",
-        payload: {
-          requestId: decision.requestId,
-          clientId: decision.clientId,
-          sessionId: decision.sessionId,
-          answers,
-        },
-        requestId: decision.requestId,
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-      });
-    } else if (decision.answerValue !== undefined) {
-      this.repo.saveAnswers(decided.id, [{ value: decision.answerValue, label: decision.answerLabel ?? decision.answerValue }]);
-      this.repo.enqueue({
-        idempotencyKey: `e2e-decision-${decision.requestId}-${Date.now()}`,
-        recipientId: decision.clientId,
-        messageType: "decision",
-        payload: {
-          requestId: decision.requestId,
-          clientId: decision.clientId,
-          sessionId: decision.sessionId,
-          answers: [{ value: decision.answerValue, label: decision.answerLabel ?? decision.answerValue }],
-        },
-        requestId: decision.requestId,
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-      });
+    const cbPayload: Record<string, unknown> = {};
+    if (params.value) cbPayload.value = params.value;
+    if (params.label) cbPayload.label = params.label;
+
+    this.repo.createCallbackId(actionId, req.id, params.actionType, expiresAt, cbPayload);
+
+    const result: CallbackResult = handleCallbackQuery(
+      this.repo,
+      actionId,
+      AUTHORIZED_USER_ID,
+      AUTHORIZED_USER_ID,
+      CHAT_ID,
+      this.messageIdCounter++,
+    );
+
+    if (result.type === "unauthorized" || result.type === "stale" || result.type === "expired") {
+      throw new Error(`Callback failed: ${result.type}`);
     }
+
+    enqueueDecision(this.repo, {
+      requestId: result.requestId ?? params.requestId,
+      clientId: result.clientId ?? params.clientId,
+      sessionId: result.sessionId ?? params.sessionId,
+      approved: result.approved,
+      always: result.always,
+      answerValue: result.answerValue,
+      answerLabel: result.answerLabel,
+      selectedValues: result.selectedValues,
+    }, req);
   }
 }
 
@@ -185,7 +168,7 @@ beforeAll(async () => {
 
   const config: AppConfig = {
     tokenAuth: true,
-    heartbeatIntervalMs: 500,
+    heartbeatIntervalMs: 300,
     heartbeatTimeoutMs: 10_000,
     maxMessageBytes: 65_536,
     loggingLevel: "error",
@@ -197,6 +180,7 @@ beforeAll(async () => {
     repo,
     config,
     pairingService,
+    botAdapter: fakeBot,
     ready: { dbReady: true, botReady: true },
   });
 
@@ -216,6 +200,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  fakeBot.reset();
   db.exec(`
     DELETE FROM outbox;
     DELETE FROM telegram_updates;
@@ -259,28 +244,30 @@ describe("E2E: multi-question request through full pipeline", () => {
     const ack = await waitForMessage(ws, 3000);
     expect(ack).toBeDefined();
 
-    // Verify request is in DB
+    // Verify request persisted + bot received it
     const req = repo.findRequest(requestId, client.id, sessionId);
     expect(req).toBeDefined();
     expect(req!.status).toBe("pending");
+    expect(fakeBot.pendingCount).toBe(1);
 
-    // Simulate bot decision
-    fakeBot.simulateDecision({
+    // Drive the callback through handleCallbackQuery + enqueueDecision (production path)
+    fakeBot.simulateCallback({
+      actionType: "question_select",
       requestId,
       clientId: client.id,
       sessionId,
-      answerValue: "src-index",
-      answerLabel: "src/index.ts",
+      value: "src-index",
+      label: "src/index.ts",
     });
 
-    // Dispatch service should deliver the decision to the WebSocket client
+    // Dispatch service transitions decided→dispatching and delivers to WebSocket
     const decision = await waitForMessageType(ws, "decision", 5000);
     expect(decision).toBeDefined();
     expect(decision.type).toBe("decision");
     const dp = decision.payload as Record<string, unknown>;
     expect(dp.requestId).toBe(requestId);
 
-    // Plugin sends apply_result
+    // Plugin sends apply_result → dispatching→applied
     ws.send(JSON.stringify(clientMsg("apply_result", {
       requestId,
       clientId: client.id,
@@ -291,7 +278,6 @@ describe("E2E: multi-question request through full pipeline", () => {
     const ack2 = await waitForMessage(ws, 3000);
     expect(ack2).toBeDefined();
 
-    // Verify request status is "applied"
     const reqAfter = repo.findRequest(requestId, client.id, sessionId);
     expect(reqAfter).toBeDefined();
     expect(reqAfter!.status).toBe("applied");
@@ -325,12 +311,13 @@ describe("E2E: multi-question request through full pipeline", () => {
 
     const req = repo.findRequest(requestId, client.id, sessionId);
     expect(req!.status).toBe("pending");
+    expect(fakeBot.pendingCount).toBe(1);
 
-    fakeBot.simulateDecision({
+    fakeBot.simulateCallback({
+      actionType: "permission_approve",
       requestId,
       clientId: client.id,
       sessionId,
-      approved: true,
     });
 
     const decision = await waitForMessageType(ws, "decision", 5000);
@@ -380,12 +367,11 @@ describe("E2E: permission always and reject", () => {
 
     await waitForMessage(ws, 3000);
 
-    fakeBot.simulateDecision({
+    fakeBot.simulateCallback({
+      actionType: "permission_always",
       requestId,
       clientId: client.id,
       sessionId,
-      approved: true,
-      always: true,
     });
 
     const decision = await waitForMessageType(ws, "decision", 5000);
@@ -431,11 +417,11 @@ describe("E2E: permission always and reject", () => {
 
     await waitForMessage(ws, 3000);
 
-    fakeBot.simulateDecision({
+    fakeBot.simulateCallback({
+      actionType: "permission_reject",
       requestId,
       clientId: client.id,
       sessionId,
-      approved: false,
     });
 
     const decision = await waitForMessageType(ws, "decision", 5000);
@@ -462,7 +448,7 @@ describe("E2E: offline client reconnect", () => {
     const client = repo.createClient("e2e-offline-token");
     const sessionId = "session-e2e-1";
 
-    // Create request and transition it to dispatching while client is offline
+    // Create an already-decided+dispatching+enqueued request (simulated prior session)
     const req = repo.upsertRequest({
       requestId: "req-e2e-offline",
       clientId: client.id,
@@ -473,7 +459,6 @@ describe("E2E: offline client reconnect", () => {
     repo.updateRequestStatus(req.id, "decided");
     repo.updateRequestStatus(req.id, "dispatching");
 
-    // Enqueue decision while client is offline
     repo.enqueue({
       idempotencyKey: "offline-key",
       recipientId: client.id,
@@ -488,7 +473,7 @@ describe("E2E: offline client reconnect", () => {
       expiresAt: new Date(Date.now() + 120_000),
     });
 
-    // Now connect client - set up message listener BEFORE open to avoid race with dispatch
+    // Connect client — dispatchPending on connect delivers the pending decision
     const ws = new WebSocket(wsUrl(port, `?token=e2e-offline-token`));
     const decision = await new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("timeout waiting for decision")), 5000);
@@ -513,13 +498,13 @@ describe("E2E: offline client reconnect", () => {
 // ─── E2E: Stale (expired) request ──────────────────────
 
 describe("E2E: stale request", () => {
-  it("rejects a decision for an expired request", async () => {
+  it("rejects a callback for an expired request via handleCallbackQuery", async () => {
     const client = repo.createClient("e2e-stale-token");
     const requestId = "req-e2e-stale";
     const sessionId = "session-e2e-1";
 
     // Insert already-expired request
-    repo.upsertRequest({
+    const req = repo.upsertRequest({
       requestId,
       clientId: client.id,
       sessionId,
@@ -527,20 +512,23 @@ describe("E2E: stale request", () => {
       expiresAt: new Date(Date.now() - 60_000),
     });
 
-    const req = repo.findRequest(requestId, client.id, sessionId);
-    expect(req!.status).toBe("pending");
+    const actionId = "stale-expired-cb";
+    const expiresAt = new Date(Date.now() + 60_000);
+    repo.createCallbackId(actionId, req.id, "question_select", expiresAt, { value: "x", label: "X" });
 
-    // Callback system checks expiration - simulate via direct repo call
-    const cbResult = repo.findAndClaimCallbackId("nonexistent");
-    expect(cbResult).toBeUndefined();
-
-    // Expire the request and verify state
-    repo.updateRequestStatus(req!.id, "expired");
-    const reqExp = repo.findRequestById(req!.id);
-    expect(reqExp!.status).toBe("expired");
+    // handleCallbackQuery should detect the request expired via state machine
+    const result = handleCallbackQuery(
+      repo,
+      actionId,
+      AUTHORIZED_USER_ID,
+      AUTHORIZED_USER_ID,
+      CHAT_ID,
+      200,
+    );
+    expect(result.type).toBe("expired");
   });
 
-  it("stale callback query returns stale result", async () => {
+  it("stale callback for non-pending request returns stale via handleCallbackQuery", async () => {
     const client = repo.createClient("e2e-stale2-token");
     const requestId = "req-e2e-stale2";
     const sessionId = "session-e2e-2";
@@ -553,26 +541,22 @@ describe("E2E: stale request", () => {
       expiresAt: new Date(Date.now() + 60_000),
     });
 
-    // Create a callback ID
-    const cb = repo.createCallbackId(
-      "stale-action-id",
-      req.id,
-      "question_select",
-      new Date(Date.now() + 60_000),
-      { value: "test", label: "Test" },
-    );
-    expect(cb).toBeDefined();
+    const actionId = "stale-nonpending-cb";
+    repo.createCallbackId(actionId, req.id, "question_select", new Date(Date.now() + 60_000), { value: "test", label: "Test" });
 
-    // Mark request as already decided (not pending)
+    // Transition request away from pending before callback is processed
     repo.updateRequestStatus(req.id, "decided");
 
-    // Callback should be stale (request not pending)
-    const claimAttempt = repo.findAndClaimCallbackId("stale-action-id");
-    expect(claimAttempt).toBeDefined();
-
-    // Verify the stale condition manually
-    const reqAfter = repo.findRequestById(req.id);
-    expect(reqAfter!.status).toBe("decided");
+    // handleCallbackQuery should detect stale via state machine
+    const result = handleCallbackQuery(
+      repo,
+      actionId,
+      AUTHORIZED_USER_ID,
+      AUTHORIZED_USER_ID,
+      CHAT_ID,
+      201,
+    );
+    expect(result.type).toBe("stale");
   });
 });
 
@@ -584,7 +568,6 @@ describe("E2E: server restart with persisted SQLite", () => {
     const requestId = "req-e2e-restart";
     const sessionId = "session-e2e-1";
 
-    // Create request and outbox entry
     const req = repo.upsertRequest({
       requestId,
       clientId: client.id,
@@ -611,7 +594,6 @@ describe("E2E: server restart with persisted SQLite", () => {
     const db2 = new Database(join(tmpDir, "test.db"));
 
     try {
-      // Verify data persisted
       const row = db2.prepare("SELECT * FROM outbox WHERE request_id = ?").get(requestId) as Record<string, unknown> | undefined;
       expect(row).toBeDefined();
       expect(row!.status).toBe("pending");
@@ -628,7 +610,7 @@ describe("E2E: server restart with persisted SQLite", () => {
 // ─── E2E: Duplicate Telegram callback ──────────────────
 
 describe("E2E: duplicate Telegram callback", () => {
-  it("handles duplicate callback query idempotently", async () => {
+  it("handles duplicate callback query idempotently via handleCallbackQuery", async () => {
     const client = repo.createClient("e2e-dup-cb-token");
     const requestId = "req-e2e-dup-cb";
     const sessionId = "session-e2e-1";
@@ -641,23 +623,31 @@ describe("E2E: duplicate Telegram callback", () => {
       expiresAt: new Date(Date.now() + 60_000),
     });
 
-    const actionId = "dup-action-id";
-    const cb = repo.createCallbackId(
+    const actionId = "dup-action-id-real";
+    repo.createCallbackId(actionId, req.id, "question_select", new Date(Date.now() + 60_000), { value: "opt-a", label: "Option A" });
+
+    // First callback succeeds through real handler
+    const result1 = handleCallbackQuery(
+      repo,
       actionId,
-      req.id,
-      "question_select",
-      new Date(Date.now() + 60_000),
-      { value: "opt-a", label: "Option A" },
+      AUTHORIZED_USER_ID,
+      AUTHORIZED_USER_ID,
+      CHAT_ID,
+      300,
     );
-    expect(cb).toBeDefined();
+    expect(result1.type).toBe("question");
+    expect(result1.requestId).toBe(requestId);
 
-    // First claim succeeds
-    const claim1 = repo.findAndClaimCallbackId(actionId);
-    expect(claim1).toBeDefined();
-
-    // Second claim fails (already claimed)
-    const claim2 = repo.findAndClaimCallbackId(actionId);
-    expect(claim2).toBeUndefined();
+    // Second callback with same actionId is stale (already claimed)
+    const result2 = handleCallbackQuery(
+      repo,
+      actionId,
+      AUTHORIZED_USER_ID,
+      AUTHORIZED_USER_ID,
+      CHAT_ID,
+      301,
+    );
+    expect(result2.type).toBe("stale");
   });
 });
 
@@ -680,7 +670,7 @@ describe("E2E: unauthorized user", () => {
     const { confirmPairingCode } = pairingService;
     const result = await confirmPairingCode(
       "INVALID-CODE",
-      999999999, // wrong user
+      999999999,
       async () => {},
     );
     expect(result.success).toBe(false);

@@ -128,7 +128,18 @@ export function createDispatchService(
       return false;
     }
 
-    return req.status === "dispatching";
+    if (req.status === "dispatching") return true;
+
+    if (req.status === "decided") {
+      try {
+        repo.updateRequestStatus(req.id, "dispatching");
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    return false;
   }
 
   async function handleApplyAcknowledgement(

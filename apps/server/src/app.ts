@@ -3,6 +3,7 @@ import fastifyWebsocket from "@fastify/websocket";
 import type Database from "better-sqlite3";
 import type { Repository } from "./db/repository.js";
 import type { PairingService } from "./pairing/service.js";
+import type { BotAdapter } from "./telegram/bot.js";
 import { healthLiveHandler, healthReadyHandler, setDbReady, setBotReady } from "./health.js";
 import { createConnectionRegistry } from "./relay/connections.js";
 import { createDispatchService } from "./relay/dispatch.js";
@@ -21,11 +22,12 @@ export interface AppOptions {
   repo: Repository;
   config: AppConfig;
   pairingService?: PairingService;
+  botAdapter?: BotAdapter;
   ready?: { dbReady: boolean; botReady: boolean };
 }
 
 export async function createApp(options: AppOptions): Promise<ReturnType<typeof Fastify>> {
-  const { db, repo, config, pairingService, ready } = options;
+  const { db, repo, config, pairingService, botAdapter, ready } = options;
 
   setDbReady(ready?.dbReady ?? false);
   setBotReady(ready?.botReady ?? false);
@@ -56,6 +58,7 @@ export async function createApp(options: AppOptions): Promise<ReturnType<typeof 
           confirmPairingFromWs: pairingService.confirmPairingFromWs.bind(pairingService),
         }
       : undefined,
+    botAdapter,
   });
 
   // Health endpoints

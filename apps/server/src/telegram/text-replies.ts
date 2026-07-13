@@ -1,4 +1,5 @@
 import type { Repository } from "../db/repository.js";
+import { transitionRequest } from "@repo/core";
 
 export interface TextReplyResult {
   type: "correlated" | "orphan" | "unauthorized" | "stale";
@@ -44,7 +45,29 @@ export function handleTextReply(
     return { type: "stale" };
   }
 
-  if (req.status !== "pending") {
+  const next = transitionRequest(
+    {
+      requestId: req.requestId,
+      clientId: req.clientId,
+      sessionId: req.sessionId,
+      status: req.status,
+      expiresAt: new Date(req.expiresAt),
+    },
+    {
+      type: "DECISION",
+      requestId: req.requestId,
+      clientId: req.clientId,
+      sessionId: req.sessionId,
+    },
+    new Date(),
+  );
+
+  if (!next || next.status === "expired") {
+    repo.deleteFreplyTracking(tracking.id);
+    return { type: "stale" };
+  }
+
+  if (next.status !== "decided" && next.status !== "rejected") {
     repo.deleteFreplyTracking(tracking.id);
     return { type: "stale" };
   }
