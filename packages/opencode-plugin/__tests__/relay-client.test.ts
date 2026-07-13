@@ -42,7 +42,7 @@ class FakeWebSocket {
 	removeEventListener() {}
 }
 
-function makeDecision(requestId: string, approved = true): DecisionMessage {
+function makeDecision(requestId: string, approved = true, always?: boolean): DecisionMessage {
 	return {
 		protocolVersion: 1,
 		messageId: `srv-dec-${requestId}`,
@@ -53,8 +53,9 @@ function makeDecision(requestId: string, approved = true): DecisionMessage {
 			clientId: "client-opencode-001",
 			sessionId: "session-abc123",
 			approved,
+			...always !== undefined ? { always } : {},
 		},
-	}
+	} as DecisionMessage
 }
 
 function makeAnswersDecision(requestId: string, answers: Array<{ value: string; label: string }>): DecisionMessage {
@@ -242,6 +243,66 @@ describe("RelayClient", () => {
 			expect(hbCalls.length).toBeGreaterThan(0)
 		}, { timeout: 500, interval: 10 })
 	}, 5000)
+
+	it("preserves always flag in decision through parseServerMessage", async () => {
+		const onDecision = vi.fn()
+		const client = createClient({ onDecision })
+		client.connect()
+
+		await vi.waitFor(() => { expect(fakeWs).not.toBeNull() }, { timeout: 200 })
+		fakeWs!.emit("message", serverPairingMessage(true))
+		await vi.waitFor(() => { expect(client.currentStatus).toBe("paired") }, { timeout: 200 })
+
+		const dec = makeDecision("req-always", true, true)
+		fakeWs!.emit("message", JSON.stringify(dec))
+
+		await vi.waitFor(() => {
+			expect(onDecision).toHaveBeenCalledTimes(1)
+		}, { timeout: 200 })
+
+		const calledWith: DecisionMessage = onDecision.mock.calls[0]![0]
+		expect(calledWith.payload.always).toBe(true)
+	})
+
+	it("preserves always false in decision message", async () => {
+		const onDecision = vi.fn()
+		const client = createClient({ onDecision })
+		client.connect()
+
+		await vi.waitFor(() => { expect(fakeWs).not.toBeNull() }, { timeout: 200 })
+		fakeWs!.emit("message", serverPairingMessage(true))
+		await vi.waitFor(() => { expect(client.currentStatus).toBe("paired") }, { timeout: 200 })
+
+		const dec = makeDecision("req-once", true, false)
+		fakeWs!.emit("message", JSON.stringify(dec))
+
+		await vi.waitFor(() => {
+			expect(onDecision).toHaveBeenCalledTimes(1)
+		}, { timeout: 200 })
+
+		const calledWith: DecisionMessage = onDecision.mock.calls[0]![0]
+		expect(calledWith.payload.always).toBe(false)
+	})
+
+	it("always field is absent from decision when not provided", async () => {
+		const onDecision = vi.fn()
+		const client = createClient({ onDecision })
+		client.connect()
+
+		await vi.waitFor(() => { expect(fakeWs).not.toBeNull() }, { timeout: 200 })
+		fakeWs!.emit("message", serverPairingMessage(true))
+		await vi.waitFor(() => { expect(client.currentStatus).toBe("paired") }, { timeout: 200 })
+
+		const dec = makeDecision("req-no-always", true)
+		fakeWs!.emit("message", JSON.stringify(dec))
+
+		await vi.waitFor(() => {
+			expect(onDecision).toHaveBeenCalledTimes(1)
+		}, { timeout: 200 })
+
+		const calledWith: DecisionMessage = onDecision.mock.calls[0]![0]
+		expect(calledWith.payload.always).toBeUndefined()
+	})
 
 	it("handles malformed messages gracefully", async () => {
 		const onDecision = vi.fn()

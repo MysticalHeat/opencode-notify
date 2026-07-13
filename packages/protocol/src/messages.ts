@@ -164,6 +164,7 @@ const decisionMessageSchema = z.object({
       sessionId: sessionIdField,
       answers: z.array(answerSchema).optional(),
       approved: z.boolean().optional(),
+      always: z.boolean().optional(),
     })
     .refine(
       (p) =>

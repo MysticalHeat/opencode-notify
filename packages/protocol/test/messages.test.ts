@@ -165,6 +165,17 @@ describe("parseServerMessage (valid)", () => {
     expect(result.payload.answers).toBeUndefined();
   });
 
+  it("parses a decision message with approved and always flag", () => {
+    const input = readFixture("valid-server-decision-approved-always.json");
+    const result = parseServerMessage(input);
+    expect(result.type).toBe("decision");
+    if (result.type !== "decision") throw new Error("wrong type");
+    expect(result.payload.requestId).toBe("req-003");
+    expect(result.payload.approved).toBe(true);
+    expect(result.payload.always).toBe(true);
+    expect(result.payload.answers).toBeUndefined();
+  });
+
   it("parses an apply-result message", () => {
     const input = readFixture("valid-server-apply-result.json");
     const result = parseServerMessage(input);
