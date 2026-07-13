@@ -1,7 +1,6 @@
 {
-  "name": "@repo/opencode-plugin",
+  "name": "@nomli/opencode-notify",
   "version": "0.0.0",
-  "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -14,6 +13,17 @@
   "files": [
     "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nomli/opencode-notify.git",
+    "directory": "packages/opencode-plugin"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
@@ -24,7 +34,8 @@
     "node-notifier": "^10.0.1"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": "*"
+    "@opencode-ai/plugin": "*",
+    "@opencode-ai/sdk": "*"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "^1.17.18",
