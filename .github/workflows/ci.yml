@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Build & Check (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+
+      - name: Pack dry-run (plugin package)
+        working-directory: packages/opencode-plugin
+        run: npm pack --dry-run
+
+      - name: Check package.json for private packages
+        run: |
+          set -e
+          find packages apps -name package.json -maxdepth 2 | while read -r f; do
+            echo "=== $f ==="
+            node -e "
+              const p = require('./$f');
+              if (!p.name) { console.error('ERROR: missing name'); process.exit(1); }
+              if (p.private && !p.name.startsWith('@repo/')) {
+                console.warn('WARN: private package does not use @repo/ scope: ' + p.name);
+              }
+              if (!p.private && (!p.files || p.files.length === 0)) {
+                console.warn('WARN: public package has no files field: ' + p.name);
+              }
+              console.log('OK: ' + p.name + ' private=' + p.private);
+            " || exit 1
+          done
+
+  docker-smoke:
+    name: Docker Build Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t opencode-notify:ci .
