@@ -39,7 +39,7 @@
     "@opencode-ai/sdk": "*"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "^1.17.18",
+    "@opencode-ai/plugin": "^1.18.15",
     "@opencode-ai/sdk": "*",
     "@repo/protocol": "*",
     "tsup": "^8.5.0",
