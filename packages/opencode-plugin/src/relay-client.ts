@@ -21,10 +21,12 @@ export type RelayStatus =
 export interface RelayClientOptions {
 	url: string
 	clientToken: string
+	pairingCode?: string
 	clientId: string
 	sessionId: string
 	onDecision: RelayDecisionCallback
 	onStatusChange?: RelayStatusCallback
+	onTokenIssued?: (token: string, clientId: string) => void | Promise<void>
 	heartbeatIntervalMs?: number
 	maxReconnectDelayMs?: number
 }
@@ -56,21 +58,25 @@ export class RelayClient {
 	private closeListener: ((event: CloseEvent) => void) | null = null
 
 	readonly url: string
-	readonly clientToken: string
-	readonly clientId: string
+	private clientToken: string
+	private pairingCode: string | undefined
+	private clientId: string
 	readonly sessionId: string
 	readonly onDecision: RelayDecisionCallback
 	readonly onStatusChange: RelayStatusCallback | undefined
+	readonly onTokenIssued: ((token: string, clientId: string) => void | Promise<void>) | undefined
 	private readonly heartbeatIntervalMs: number
 	private readonly maxReconnectDelayMs: number
 
 	constructor(options: RelayClientOptions) {
 		this.url = options.url
 		this.clientToken = options.clientToken
+		this.pairingCode = options.pairingCode
 		this.clientId = options.clientId
 		this.sessionId = options.sessionId
 		this.onDecision = options.onDecision
 		this.onStatusChange = options.onStatusChange
+		this.onTokenIssued = options.onTokenIssued
 		this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_MS
 		this.maxReconnectDelayMs = options.maxReconnectDelayMs ?? DEFAULT_MAX_RECONNECT_MS
 	}
@@ -181,7 +187,7 @@ export class RelayClient {
 
 		let ws: WebSocket
 		try {
-			ws = new WebSocket(this.url)
+			ws = new WebSocket(this.connectionUrl())
 		} catch {
 			this.scheduleReconnect()
 			return
@@ -207,7 +213,6 @@ export class RelayClient {
 		ws.addEventListener("open", () => {
 			this.reconnectAttempt = 0
 			this.sendHello()
-			setTimeout(() => this.sendPairing(), 50)
 		})
 
 		ws.addEventListener("message", this.messageListener)
@@ -241,18 +246,17 @@ export class RelayClient {
 		})
 	}
 
-	private sendPairing(): void {
-		this.sendJson({
-			protocolVersion: 1,
-			messageId: this.genMessageId(),
-			type: "pairing",
-			sentAt: new Date().toISOString(),
-			payload: {
-				clientId: this.clientId,
-				sessionId: this.sessionId,
-				pairingCode: this.clientToken,
-			},
-		})
+
+	private connectionUrl(): string {
+		const url = new URL(this.url)
+		if (url.protocol === "https:") url.protocol = "wss:"
+		if (url.protocol === "http:") url.protocol = "ws:"
+		if (!url.pathname.endsWith("/v1/ws")) {
+			url.pathname = `${url.pathname.replace(/\/$/, "")}/v1/ws`
+		}
+		if (this.pairingCode) url.searchParams.set("pairing_code", this.pairingCode)
+		else url.searchParams.set("token", this.clientToken)
+		return url.toString()
 	}
 
 	private sendHeartbeat(): void {
@@ -322,6 +326,13 @@ export class RelayClient {
 		switch (msg.type) {
 			case "pairing":
 				if (msg.payload.paired) {
+					if (msg.payload.token) {
+						this.clientToken = msg.payload.token
+						this.pairingCode = undefined
+						this.clientId = msg.payload.clientId
+						void this.onTokenIssued?.(msg.payload.token, this.clientId)
+						this.sendHello()
+					}
 					this.setStatus("paired")
 					this.startHeartbeat()
 					this.flushPending()

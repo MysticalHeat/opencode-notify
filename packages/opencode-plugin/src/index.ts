@@ -1,4 +1,6 @@
 export { createNotifyPlugin } from "./notify.js"
+export { OpenCodeNotifyPlugin } from "./runtime.js"
+export { default } from "./runtime.js"
 export {
 	normalizeEventType,
 	dedupeKey,

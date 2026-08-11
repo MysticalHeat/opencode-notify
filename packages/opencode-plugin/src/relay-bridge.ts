@@ -32,6 +32,8 @@ export interface RelayBridgeDeps {
 	opencodeClient: OpencodeClient
 	clientId: string
 	sessionId: string
+	pairingCode?: string
+	onTokenIssued?: (token: string, clientId: string) => void | Promise<void>
 	relayClientFactory?: RelayClientFactory
 }
 
@@ -43,6 +45,8 @@ const defaultRelayClientFactory: RelayClientFactory = (opts) =>
 		sessionId: opts.sessionId,
 		onDecision: opts.onDecision,
 		onStatusChange: opts.onStatusChange,
+		pairingCode: opts.pairingCode,
+		onTokenIssued: opts.onTokenIssued,
 		heartbeatIntervalMs: opts.heartbeatIntervalMs,
 		maxReconnectDelayMs: opts.maxReconnectDelayMs,
 	})
@@ -51,15 +55,19 @@ export class RelayBridge {
 	private relayClient: IRelayClient | null = null
 	private readonly config: OpenCodeNotifyConfig
 	private readonly opencodeClient: OpencodeClient
-	private readonly clientId: string
+	private clientId: string
 	private readonly sessionId: string
 	private readonly factory: RelayClientFactory
+	private readonly pairingCode: string | undefined
+	private readonly onTokenIssued: ((token: string, clientId: string) => void | Promise<void>) | undefined
 
 	constructor(deps: RelayBridgeDeps) {
 		this.config = deps.config
 		this.opencodeClient = deps.opencodeClient
 		this.clientId = deps.clientId
 		this.sessionId = deps.sessionId
+		this.pairingCode = deps.pairingCode
+		this.onTokenIssued = deps.onTokenIssued
 		this.factory = deps.relayClientFactory ?? defaultRelayClientFactory
 	}
 
@@ -73,6 +81,11 @@ export class RelayBridge {
 			clientToken: relay.clientToken,
 			clientId: this.clientId,
 			sessionId: this.sessionId,
+			pairingCode: this.pairingCode,
+			onTokenIssued: async (token, clientId) => {
+				this.clientId = clientId
+				await this.onTokenIssued?.(token, clientId)
+			},
 			onDecision: (decision) => {
 				void this.processDecision(decision)
 			},

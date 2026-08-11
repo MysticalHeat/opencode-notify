@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { parseClientMessage, type ClientMessage } from "@repo/protocol";
 import type { Repository } from "../db/repository.js";
 import type { ConnectionRegistry } from "./connections.js";
 import type { DispatchService } from "./dispatch.js";
@@ -132,11 +133,11 @@ export function createGatewayHandler(options: GatewayOptions) {
         return;
       }
 
-      let msg: Record<string, unknown>;
+      let msg: ClientMessage;
       try {
-        msg = JSON.parse(data);
+        msg = parseClientMessage(JSON.parse(data));
       } catch {
-        connection.send(JSON.stringify(errorMsg("BAD_JSON", "invalid JSON")));
+        connection.send(JSON.stringify(errorMsg("PROTOCOL_VIOLATION", "invalid protocol message")));
         return;
       }
 
@@ -148,14 +149,18 @@ export function createGatewayHandler(options: GatewayOptions) {
       registry.unregister(cid);
     });
 
-    function handleMessage(id: string, msg: Record<string, unknown>): void {
-      const msgType = msg.type as string | undefined;
+    function handleMessage(id: string, msg: ClientMessage): void {
+      const msgType = msg.type;
+
+      if (msg.payload.clientId !== id) {
+        connection.send(JSON.stringify(errorMsg("CLIENT_ID_MISMATCH", "client ID does not match authenticated connection")));
+        return;
+      }
 
       switch (msgType) {
         case "hello": {
-          const payload = msg.payload as Record<string, unknown> | undefined;
-          if (!payload) break;
-          const sessionId = (payload.sessionId as string) || "unknown";
+          const payload = msg.payload;
+          const sessionId = payload.sessionId;
 
           // Re-register with the real session ID
           registry.unregister(id);
@@ -169,8 +174,7 @@ export function createGatewayHandler(options: GatewayOptions) {
 
         case "heartbeat": {
           registry.updateHeartbeat(id);
-          const hbPayload = (msg.payload ?? {}) as Record<string, unknown>;
-          const sessionId = (hbPayload.sessionId as string) || "unknown";
+          const sessionId = msg.payload.sessionId;
 
           connection.send(JSON.stringify({
             protocolVersion: 1,
@@ -183,14 +187,13 @@ export function createGatewayHandler(options: GatewayOptions) {
         }
 
         case "request_upsert": {
-          const payload = msg.payload as Record<string, unknown> | undefined;
-          if (!payload) break;
+          const payload = msg.payload;
 
-          const requestId = payload.requestId as string;
-          const sessionId = (payload.sessionId as string) || "unknown";
-          const expiresAt = new Date(payload.expiresAt as string);
-          const question = payload.question as Record<string, unknown> | undefined;
-          const permission = payload.permission as Record<string, unknown> | undefined;
+          const requestId = payload.requestId;
+          const sessionId = payload.sessionId;
+          const expiresAt = new Date(payload.expiresAt);
+          const question = payload.question;
+          const permission = payload.permission;
 
           let payloadType: "question" | "permission" | undefined;
           let payloadJson: string | undefined;
@@ -228,11 +231,10 @@ export function createGatewayHandler(options: GatewayOptions) {
         }
 
         case "request_cancel": {
-          const payload = msg.payload as Record<string, unknown> | undefined;
-          if (!payload) break;
+          const payload = msg.payload;
 
-          const requestId = payload.requestId as string;
-          const sessionId = (payload.sessionId as string) || "unknown";
+          const requestId = payload.requestId;
+          const sessionId = payload.sessionId;
 
           const req = repo.findRequest(requestId, id, sessionId);
           if (req && req.status === "pending") {
@@ -250,12 +252,11 @@ export function createGatewayHandler(options: GatewayOptions) {
         }
 
         case "apply_result": {
-          const payload = msg.payload as Record<string, unknown> | undefined;
-          if (!payload) break;
+          const payload = msg.payload;
 
-          const requestId = payload.requestId as string;
-          const sessionId = (payload.sessionId as string) || "unknown";
-          const success = payload.success as boolean;
+          const requestId = payload.requestId;
+          const sessionId = payload.sessionId;
+          const success = payload.success;
 
           dispatch.handleApplyAcknowledgement(
             requestId,

@@ -33,6 +33,7 @@ export async function createApp(options: AppOptions): Promise<ReturnType<typeof 
   setBotReady(ready?.botReady ?? false);
 
   const app = Fastify({ logger: { level: config.loggingLevel } });
+  const pairingAttempts = new Map<string, number[]>();
   await app.register(fastifyWebsocket, {
     options: { maxPayload: config.maxMessageBytes },
   });
@@ -64,6 +65,16 @@ export async function createApp(options: AppOptions): Promise<ReturnType<typeof 
   // Health endpoints
   app.get("/health/live", async () => healthLiveHandler(null, null));
   app.get("/health/ready", async (_request, reply) => healthReadyHandler(null, reply));
+  app.post("/v1/pairing", async (request, reply) => {
+    if (!pairingService) return reply.code(503).send({ error: "pairing unavailable" });
+    const address = request.ip;
+    const now = Date.now();
+    const recent = (pairingAttempts.get(address) ?? []).filter((at) => now - at < 60_000);
+    if (recent.length >= 5) return reply.code(429).send({ error: "too many pairing attempts" });
+    recent.push(now);
+    pairingAttempts.set(address, recent);
+    return pairingService.generatePairingCode();
+  });
 
   // WebSocket endpoint
   app.register(async function wsScope(fastify) {

@@ -4,7 +4,7 @@ import { openDatabase } from "./db/database.js";
 import { runMigrations } from "./db/migrate.js";
 import { createRepository } from "./db/repository.js";
 import { createPairingService } from "./pairing/service.js";
-import { createBotAdapter } from "./telegram/bot.js";
+import { createBotAdapter, type BotAdapter } from "./telegram/bot.js";
 import { createApp, type AppConfig } from "./app.js";
 import { setDbReady, setBotReady } from "./health.js";
 
@@ -21,7 +21,7 @@ async function main() {
   const pairingService = createPairingService(repo, config.telegram.userId);
 
   const isFakeTelegram = config.telegram.botToken === FAKE_TOKEN;
-  let botAdapter;
+  let botAdapter: BotAdapter | undefined;
   if (!isFakeTelegram) {
     botAdapter = createBotAdapter(
       config.telegram.botToken,
@@ -31,7 +31,7 @@ async function main() {
     );
   }
 
-  setBotReady(!isFakeTelegram);
+  setBotReady(isFakeTelegram);
 
   const appConfig: AppConfig = {
     tokenAuth: true,
@@ -47,13 +47,15 @@ async function main() {
     config: appConfig,
     pairingService,
     botAdapter,
-    ready: { dbReady: true, botReady: !isFakeTelegram },
+    ready: { dbReady: true, botReady: isFakeTelegram },
   });
 
   if (botAdapter && !isFakeTelegram) {
-    botAdapter.start().catch((err) => {
+    await botAdapter.start(undefined, (err) => {
+      setBotReady(false);
       app.log.error(err, "Bot polling failed");
     });
+    setBotReady(true);
   }
 
   let shuttingDown = false;
@@ -62,10 +64,17 @@ async function main() {
     shuttingDown = true;
     app.log.info(`Received ${signal}, shutting down...`);
     try {
+      await botAdapter?.stop();
+    } catch {
+      // Continue shutdown if Telegram cannot confirm the final update offset.
+    }
+    try {
       await app.close();
     } catch {
       // Ignore close errors during shutdown
     }
+    setBotReady(false);
+    setDbReady(false);
     close();
     process.exit(0);
   };

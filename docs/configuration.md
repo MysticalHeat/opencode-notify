@@ -32,11 +32,14 @@ mid-write.
     // url/clientToken pair has been provided.
     "enabled": false,
 
-    // Relay server URL.  Must use https:// or wss://.
+    // Relay server origin or WebSocket endpoint. Must use https:// or wss://.
     "url": "https://relay.example.com",
 
-    // Client bearer token issued by the relay.
+    // Client bearer token issued during pairing. Omit on first run.
     "clientToken": "<token>",
+
+    // Stable identity assigned by the relay. Managed automatically.
+    "clientId": "<client-id>",
 
     // Per-client metadata forwarded during pairing.
     "clientMetadata": {
@@ -79,7 +82,8 @@ mid-write.
 | `version` | number | `1` | Config schema version |
 | `relay.enabled` | boolean | `false` | Whether the relay transport is active |
 | `relay.url` | string | — | Relay server URL (`https://` or `wss://`) |
-| `relay.clientToken` | string | — | Client bearer token |
+| `relay.clientToken` | string | — | Client bearer token, automatically persisted after pairing |
+| `relay.clientId` | string | — | Relay client identity, automatically managed by the plugin |
 | `relay.clientMetadata.notifyChildSessions` | boolean | `false` | Relay should notify for child sessions |
 | `relay.clientMetadata.sounds.*` | string | `"default"`, `"basso"`, `"ping"`, `"default"` | Sound names forwarded to relay |
 | `relay.clientMetadata.quietHours.enabled` | boolean | `false` | Quiet-hours range active |
@@ -90,6 +94,12 @@ mid-write.
 | `desktop.quietHours.*` | — | (same as relay) | Desktop quiet hours |
 
 All sections are optional. Missing fields are filled from the defaults above.
+
+When relay is enabled without `relay.clientToken`, the plugin requests a
+single-use pairing code from `POST /v1/pairing`, prints it in the OpenCode
+process log, and connects with that temporary code. Send `/pair <code>` to the
+configured Telegram bot. The server returns a bearer token over the TLS WebSocket
+connection; the plugin stores the token and client ID atomically in this file.
 
 ## Environment-variable overrides
 

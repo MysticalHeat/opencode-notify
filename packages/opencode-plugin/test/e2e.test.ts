@@ -182,9 +182,9 @@ describe("E2E: plugin end-to-end with fake server and fake OpenCode", () => {
     fakeServer!.emit("message", makePairingResponse(true));
 
     await vi.waitFor(() => {
-      // Client should be paired
+      // Client sends its identity after the authenticated WebSocket opens.
       const msgs = fakeServer!.sentMessages;
-      expect(msgs.some((m) => m.includes('"pairing"'))).toBe(true);
+      expect(msgs.some((m) => m.includes('"hello"'))).toBe(true);
     }, { timeout: 500 });
 
     // Server sends a decision
@@ -231,7 +231,7 @@ describe("E2E: plugin end-to-end with fake server and fake OpenCode", () => {
     fakeServer!.emit("message", makePairingResponse(true));
 
     await vi.waitFor(() => {
-      expect(fakeServer!.sentMessages.some((m) => m.includes('"pairing"'))).toBe(true);
+      expect(fakeServer!.sentMessages.some((m) => m.includes('"hello"'))).toBe(true);
     }, { timeout: 500 });
 
     const dec = makeDecision("req-e2e-perm", false);
@@ -246,7 +246,7 @@ describe("E2E: plugin end-to-end with fake server and fake OpenCode", () => {
     }, { timeout: 500 });
   }, 10_000);
 
-  it("sends hello and pairing handshake messages after connecting", async () => {
+  it("sends hello after connecting", async () => {
     const relay = createPlugin();
     relay.connect();
 
@@ -258,11 +258,8 @@ describe("E2E: plugin end-to-end with fake server and fake OpenCode", () => {
       expect(relay.currentStatus).toBe("paired");
     }, { timeout: 500 });
 
-    // Verify hello/pairing handshake messages were sent (pairing is sent after 50ms delay)
+    // Authentication is part of the WebSocket URL; hello carries session identity.
     expect(fakeServer!.sentMessages.join("\n")).toContain('"hello"');
-    await vi.waitFor(() => {
-      expect(fakeServer!.sentMessages.join("\n")).toContain('"pairing"');
-    }, { timeout: 500 });
   }, 10_000);
 
   it("buffers upserts while not paired and flushes after pairing", async () => {

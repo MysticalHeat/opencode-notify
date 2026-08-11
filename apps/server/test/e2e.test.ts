@@ -39,6 +39,8 @@ class FakeBotAdapter implements BotAdapter {
 
   async start(): Promise<void> {}
 
+  async stop(): Promise<void> {}
+
   webhookHandler(_expectedToken: string) {
     return async (_req: unknown, _res: unknown) => {};
   }
@@ -594,6 +596,7 @@ describe("E2E: server restart with persisted SQLite", () => {
     const db2 = new Database(join(tmpDir, "test.db"));
 
     try {
+      runMigrations(db2);
       const row = db2.prepare("SELECT * FROM outbox WHERE request_id = ?").get(requestId) as Record<string, unknown> | undefined;
       expect(row).toBeDefined();
       expect(row!.status).toBe("pending");

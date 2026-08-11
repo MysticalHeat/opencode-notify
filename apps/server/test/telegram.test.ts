@@ -858,6 +858,7 @@ describe("bot adapter creation", () => {
     const adapter = createBotAdapter("test:token", AUTHORIZED_USER_ID, repo, pairingService);
     expect(adapter).toBeDefined();
     expect(typeof adapter.start).toBe("function");
+    expect(typeof adapter.stop).toBe("function");
   });
 
   it("bot adapter has webhook handler", () => {

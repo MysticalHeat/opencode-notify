@@ -177,8 +177,10 @@ export function enqueueDecision(
 // ─── Bot adapter (grammY) ───────────────────────────────
 
 export interface BotAdapter {
-  /** Start long polling (blocking). */
-  start(onGetUpdates?: (updates: unknown[]) => void): Promise<void>;
+  /** Validate the bot token and begin long polling without blocking startup. */
+  start(onGetUpdates?: (updates: unknown[]) => void, onFatal?: (error: unknown) => void): Promise<void>;
+  /** Stop long polling and confirm the latest Telegram update offset. */
+  stop(): Promise<void>;
   /** Return a webhook handler compatible with node:http createServer. */
   webhookHandler(expectedToken: string): (req: { body?: unknown; headers: Record<string, string | undefined> }, res: { statusCode: number; end: (body?: string) => void }) => Promise<void>;
   /** Post a pending request to the bot as a Telegram message. */
@@ -409,14 +411,20 @@ export function createBotAdapter(
   });
 
   return {
-    async start(onGetUpdates?: (updates: unknown[]) => void) {
+    async start(onGetUpdates?: (updates: unknown[]) => void, onFatal?: (error: unknown) => void) {
       if (onGetUpdates) {
         bot.use(async (ctx, next) => {
           onGetUpdates([ctx.update]);
           await next();
         });
       }
-      await bot.start();
+      bot.catch((error) => onFatal?.(error));
+      await bot.init();
+      void bot.start().catch((error) => onFatal?.(error));
+    },
+
+    async stop() {
+      if (bot.isRunning()) await bot.stop();
     },
 
     webhookHandler(expectedToken: string) {

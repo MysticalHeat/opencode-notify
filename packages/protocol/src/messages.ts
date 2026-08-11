@@ -125,14 +125,6 @@ const requestCancelMessageSchema = z.object({
   }),
 });
 
-const clientMessageSchema = z.discriminatedUnion("type", [
-  helloMessageSchema,
-  heartbeatMessageSchema,
-  pairingMessageSchema,
-  requestUpsertMessageSchema,
-  requestCancelMessageSchema,
-]);
-
 // ─── SERVER MESSAGE SCHEMAS ────────────────────────────
 
 const serverPairingMessageSchema = z.object({
@@ -142,6 +134,7 @@ const serverPairingMessageSchema = z.object({
     clientId: clientIdField,
     sessionId: sessionIdField,
     paired: z.boolean(),
+    token: z.string().min(1).max(MAX_ID_LENGTH).optional(),
   }),
 });
 
@@ -187,6 +180,15 @@ const applyResultMessageSchema = z.object({
     error: z.string().max(MAX_ERROR_MESSAGE_LENGTH).optional(),
   }),
 });
+
+const clientMessageSchema = z.discriminatedUnion("type", [
+  helloMessageSchema,
+  heartbeatMessageSchema,
+  pairingMessageSchema,
+  requestUpsertMessageSchema,
+  requestCancelMessageSchema,
+  applyResultMessageSchema,
+]);
 
 const errorMessageSchema = z.object({
   ...envelopeBase,

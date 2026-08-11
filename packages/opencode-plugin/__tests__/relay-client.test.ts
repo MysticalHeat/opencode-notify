@@ -139,6 +139,29 @@ describe("RelayClient", () => {
 		}, { timeout: 200 })
 	})
 
+	it("uses the relay WebSocket endpoint and token authentication", async () => {
+		const client = createClient({ url: "https://relay.example.com" })
+		client.connect()
+		await vi.waitFor(() => expect(fakeWs).not.toBeNull(), { timeout: 200 })
+		expect(fakeWs!.url).toBe("wss://relay.example.com/v1/ws?token=pairing-token-123")
+	})
+
+	it("uses a pairing code once and persists the issued token through its callback", async () => {
+		const onTokenIssued = vi.fn()
+		const client = createClient({ pairingCode: "ABCD-1234", onTokenIssued })
+		client.connect()
+		await vi.waitFor(() => expect(fakeWs).not.toBeNull(), { timeout: 200 })
+		expect(fakeWs!.url).toContain("pairing_code=ABCD-1234")
+		fakeWs!.emit("message", JSON.stringify({
+			protocolVersion: 1,
+			messageId: "pair-token",
+			type: "pairing",
+			sentAt: new Date().toISOString(),
+			payload: { clientId: "client-opencode-001", sessionId: "session-abc123", paired: true, token: "issued-token" },
+		}))
+		await vi.waitFor(() => expect(onTokenIssued).toHaveBeenCalledWith("issued-token", "client-opencode-001"), { timeout: 200 })
+	})
+
 	it("calls onDecision when a decision message arrives", async () => {
 		const onDecision = vi.fn()
 		const client = createClient({ onDecision })

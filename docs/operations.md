@@ -128,19 +128,18 @@ If the previous version is unknown, check git history or the release page at
 The plugin uses a relay-based pairing flow to associate an OpenCode instance
 with a notification target (e.g., Telegram).
 
-1. Enable the relay in the plugin config (`~/.config/opencode/opencode-notify.json`):
+1. Enable the relay in the plugin config (`~/.config/opencode/opencode-notify.json`). Do not add a token on first pairing:
    ```jsonc
    {
      "relay": {
        "enabled": true,
-       "url": "wss://relay.example.com",
-       "clientToken": "<token>"
+        "url": "wss://relay.example.com"
      }
    }
    ```
-2. OpenCode will present a pairing code in the CLI.
+2. Restart OpenCode. The plugin requests a single-use pairing code from the relay and writes it to the OpenCode process log.
 3. Send the pairing code to the Telegram bot (`/pair <code>`).
-4. The relay confirms the pairing and notifications begin flowing.
+4. The relay confirms the pairing, sends a client token through the TLS WebSocket, and the plugin persists it in its `0600` configuration file. Notifications then begin flowing.
 
 ### Pairing troubleshooting
 
@@ -226,6 +225,20 @@ process, and exposes port 3000.  All persistent data (SQLite) lives under
 See `deploy/compose.example.yml` for a ready-to-customize Docker Compose
 configuration with commented Traefik labels and webhook guidance.
 
+### Backup and restore
+
+Back up the SQLite database with SQLite's backup API rather than copying only
+the `.db` file while the server is running: WAL mode may have uncheckpointed
+data in adjacent `-wal` and `-shm` files. For the Compose volume, run a backup
+from an image that includes `sqlite3`, mounting `relay-data` at `/data`, and
+use `.backup '/data/backups/opencode-notify.db'` against
+`/data/opencode-notify.db`.
+
+Stop the relay before restoring a backup, replace the database in `/data`, and
+then start the relay normally; migrations run safely on startup. Test restores
+regularly. A stale backup can restore revoked client tokens and pending outbox
+decisions, so revoke affected clients and review pending requests after restore.
+
 ### Fake Telegram mode
 
 Set `TELEGRAM_BOT_TOKEN=FAKE` to start the server without a real Telegram
@@ -235,10 +248,11 @@ testing, and smoke tests.
 
 ---
 
-## Switching from long-polling to webhook
+## Future: switching from long-polling to webhook
 
-The server starts in **long-polling** mode by default (the grammY `bot.start()`
-loop).  Switching to **webhook** mode requires a coordinated change.
+The released server supports **long-polling** only. Webhook configuration and
+the handler are scaffolding for a future release; do not follow the procedure
+below in production yet.
 
 ### When to switch
 

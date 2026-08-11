@@ -7,6 +7,7 @@ import type { NotifySoundConfig, QuietHoursConfig } from "./types.js"
 export interface RelayConfig {
 	url?: string
 	clientToken?: string
+	clientId?: string
 	enabled?: boolean
 	clientMetadata?: {
 		sounds?: NotifySoundConfig
@@ -162,6 +163,9 @@ function validateConfig(input: unknown, label: string): OpenCodeNotifyConfig {
 			}
 			if (r.clientToken !== undefined && typeof r.clientToken !== "string") {
 				errors.push("relay.clientToken must be a string")
+			}
+			if (r.clientId !== undefined && typeof r.clientId !== "string") {
+				errors.push("relay.clientId must be a string")
 			}
 			if (r.enabled !== undefined && typeof r.enabled !== "boolean") {
 				errors.push("relay.enabled must be a boolean")
