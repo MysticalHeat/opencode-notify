@@ -27,14 +27,14 @@ export interface BotResponse {
 // ─── Internal ───────────────────────────────────────────
 
 const MSG_UNAUTHORIZED = "You are not authorized to use this bot.";
-const MSG_INVALID_COMMAND = "Unknown command. Use /pair <code> or /clients.";
-const MSG_PAIR_USAGE = "Usage: /pair <code>";
+const MSG_INVALID_COMMAND = "Unknown command. Use <code>/pair &lt;code&gt;</code> or <code>/clients</code>.";
+const MSG_PAIR_USAGE = "Usage: <code>/pair &lt;code&gt;</code>";
 const MSG_PAIR_SUCCESS = "Pairing confirmed! Your client has been registered.";
 const MSG_PAIR_EXPIRED = "This pairing code has expired. Please generate a new one.";
 const MSG_PAIR_CONSUMED = "This pairing code has already been used.";
 const MSG_PAIR_INVALID = "Invalid pairing code. Please check and try again.";
 const MSG_PAIR_RATE_LIMITED = "Too many pairing attempts. Please wait and try again.";
-const MSG_REVOKE_USAGE = "Usage: /revoke <client-id>";
+const MSG_REVOKE_USAGE = "Usage: <code>/revoke &lt;client-id&gt;</code>";
 const MSG_REVOKE_SUCCESS = "Client revoked successfully.";
 const MSG_REVOKE_FAILED = "Failed to revoke client. Check the client ID and try again.";
 const MSG_NO_CLIENTS = "No registered clients found.";
