@@ -33,7 +33,7 @@ export interface RelayBridgeDeps {
 	clientId: string
 	sessionId: string
 	pairingCode?: string
-	onTokenIssued?: (token: string, clientId: string) => void | Promise<void>
+	onTokenIssued?: (token: string | undefined, clientId: string) => void | Promise<void>
 	relayClientFactory?: RelayClientFactory
 }
 
@@ -59,7 +59,7 @@ export class RelayBridge {
 	private readonly sessionId: string
 	private readonly factory: RelayClientFactory
 	private readonly pairingCode: string | undefined
-	private readonly onTokenIssued: ((token: string, clientId: string) => void | Promise<void>) | undefined
+	private readonly onTokenIssued: ((token: string | undefined, clientId: string) => void | Promise<void>) | undefined
 
 	constructor(deps: RelayBridgeDeps) {
 		this.config = deps.config

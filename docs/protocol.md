@@ -34,9 +34,9 @@ type Envelope<TType extends string, TPayload> = {
 
 | Type              | Payload Key       | Description                            |
 |-------------------|-------------------|----------------------------------------|
-| `hello`           | `clientId`, `sessionId` | Identity announcement after connect |
+| `auth`            | exactly one of `token`, `pairingCode` | Authenticate the connection before all other messages |
+| `hello`           | `clientId`, `sessionId` | Identity announcement after authentication |
 | `heartbeat`       | `clientId`, `sessionId` | Keep-alive ping                    |
-| `pairing`         | `clientId`, `sessionId`, `pairingCode` | Request pairing with a user  |
 | `request_upsert`  | `clientId`, `sessionId`, `requestId`, `expiresAt` + `question` XOR `permission` | Create or update a user-facing request |
 | `request_cancel`  | `clientId`, `sessionId`, `requestId` | Cancel an outstanding request |
 
@@ -108,8 +108,9 @@ require both sides to negotiate the version during the initial handshake
 
 ## Reconnect Behavior
 
-Each connection begins with a `hello` message from the client. If the
-transport disconnects, the client must re-send `hello` on reconnection. The
+Each connection begins with an `auth` message followed by `hello` after the
+server confirms authentication. If the transport disconnects, the client must
+re-authenticate and re-send `hello` on reconnection. The
 server may re-deliver outstanding requests after receiving `hello` (typically
 identified by `sessionId`).
 

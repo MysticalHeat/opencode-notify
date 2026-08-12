@@ -57,11 +57,7 @@ function createCommandHandler(pairingService: PairingService) {
 
     const code = args[0]!;
 
-    const result = await pairingService.confirmPairingCode(
-      code,
-      ctx.userId,
-      async (_token, _client) => { /* Token delivered via callback channel */ },
-    );
+    const result = await pairingService.confirmPairingForConnectedClient(code, ctx.userId);
 
     if (result.success) return { text: MSG_PAIR_SUCCESS };
     if (result.error?.includes("expired")) return { text: MSG_PAIR_EXPIRED };

@@ -15,7 +15,10 @@ function pairingUrl(relayUrl: string): string {
 }
 
 async function requestPairingCode(relayUrl: string): Promise<string> {
-	const response = await fetch(pairingUrl(relayUrl), { method: "POST" })
+	const response = await fetch(pairingUrl(relayUrl), {
+		method: "POST",
+		signal: AbortSignal.timeout(10_000),
+	})
 	if (!response.ok) throw new Error(`Relay pairing request failed: ${response.status}`)
 	const body = await response.json() as { code?: unknown }
 	if (typeof body.code !== "string" || !body.code) throw new Error("Relay returned an invalid pairing code")
@@ -29,10 +32,16 @@ export const OpenCodeNotifyPlugin: Plugin = async (input: PluginInput) => {
 	if (!relay?.enabled || !relay.url) return createNotifyPlugin(config.desktop)(input)
 
 	let clientId = relay.clientId ?? randomUUID()
-	const pairingCode = relay.clientToken ? undefined : await requestPairingCode(relay.url)
+	let pairingCode: string | undefined
+	try {
+		pairingCode = relay.clientToken ? undefined : await requestPairingCode(relay.url)
+	} catch (error) {
+		console.warn(`OpenCode Notify relay unavailable; using desktop notifications: ${error instanceof Error ? error.message : String(error)}`)
+		return createNotifyPlugin(config.desktop)(input)
+	}
 	if (pairingCode) console.info(`OpenCode Notify pairing code: ${pairingCode}. Send /pair ${pairingCode} to Telegram.`)
 
-	const persist = async (token?: string, issuedClientId?: string) => {
+	const persist = async (token: string | undefined, issuedClientId: string) => {
 		if (issuedClientId) clientId = issuedClientId
 		const next: OpenCodeNotifyConfig = {
 			...config,
@@ -40,7 +49,6 @@ export const OpenCodeNotifyPlugin: Plugin = async (input: PluginInput) => {
 		}
 		await writeConfig(next)
 	}
-	await persist()
 
 	const bridge = new RelayBridge({
 		config: { ...config, relay: { ...relay, clientId, clientToken: relay.clientToken ?? pairingCode } },

@@ -26,7 +26,7 @@ export interface RelayClientOptions {
 	sessionId: string
 	onDecision: RelayDecisionCallback
 	onStatusChange?: RelayStatusCallback
-	onTokenIssued?: (token: string, clientId: string) => void | Promise<void>
+	onTokenIssued?: (token: string | undefined, clientId: string) => void | Promise<void>
 	heartbeatIntervalMs?: number
 	maxReconnectDelayMs?: number
 }
@@ -49,6 +49,7 @@ export class RelayClient {
 	private status: RelayStatus = "disconnected"
 	private heartbeatTimer: ReturnType<typeof setInterval> | null = null
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+	private terminalAuthFailure = false
 	private reconnectAttempt = 0
 	private shutdownRequested = false
 	private seenDecisions = new Map<string, number>()
@@ -64,7 +65,7 @@ export class RelayClient {
 	readonly sessionId: string
 	readonly onDecision: RelayDecisionCallback
 	readonly onStatusChange: RelayStatusCallback | undefined
-	readonly onTokenIssued: ((token: string, clientId: string) => void | Promise<void>) | undefined
+	readonly onTokenIssued: ((token: string | undefined, clientId: string) => void | Promise<void>) | undefined
 	private readonly heartbeatIntervalMs: number
 	private readonly maxReconnectDelayMs: number
 
@@ -108,7 +109,7 @@ export class RelayClient {
 			this.pendingUpserts.set(event.requestId, event)
 			return
 		}
-		const msg = buildUpsertMessage(event, this.genMessageId())
+		const msg = buildUpsertMessage(event, this.genMessageId(), this.clientId)
 		this.sendJson(msg)
 	}
 
@@ -117,7 +118,7 @@ export class RelayClient {
 			this.pendingUpserts.delete(event.requestId)
 			return
 		}
-		const msg = buildCancelMessage(event, this.genMessageId())
+		const msg = buildCancelMessage(event, this.genMessageId(), this.clientId)
 		this.sendJson(msg)
 	}
 
@@ -150,7 +151,7 @@ export class RelayClient {
 	flushPending(): void {
 		if (this.status !== "paired") return
 		for (const event of this.pendingUpserts.values()) {
-			const msg = buildUpsertMessage(event, this.genMessageId())
+			const msg = buildUpsertMessage(event, this.genMessageId(), this.clientId)
 			this.sendJson(msg)
 		}
 		this.pendingUpserts.clear()
@@ -203,7 +204,7 @@ export class RelayClient {
 			this.ws = null
 			this.removeListeners()
 			if (this.shutdownRequested) return
-			if (event.code === 4001) {
+			if (event.code === 4001 || this.terminalAuthFailure) {
 				this.setStatus("disconnected")
 				return
 			}
@@ -212,7 +213,7 @@ export class RelayClient {
 
 		ws.addEventListener("open", () => {
 			this.reconnectAttempt = 0
-			this.sendHello()
+			this.sendAuth()
 		})
 
 		ws.addEventListener("message", this.messageListener)
@@ -231,6 +232,16 @@ export class RelayClient {
 		}
 		this.messageListener = null
 		this.closeListener = null
+	}
+
+	private sendAuth(): void {
+		this.sendJson({
+			protocolVersion: 1,
+			messageId: this.genMessageId(),
+			type: "auth",
+			sentAt: new Date().toISOString(),
+			payload: this.pairingCode ? { pairingCode: this.pairingCode } : { token: this.clientToken },
+		})
 	}
 
 	private sendHello(): void {
@@ -254,8 +265,6 @@ export class RelayClient {
 		if (!url.pathname.endsWith("/v1/ws")) {
 			url.pathname = `${url.pathname.replace(/\/$/, "")}/v1/ws`
 		}
-		if (this.pairingCode) url.searchParams.set("pairing_code", this.pairingCode)
-		else url.searchParams.set("token", this.clientToken)
 		return url.toString()
 	}
 
@@ -326,16 +335,7 @@ export class RelayClient {
 		switch (msg.type) {
 			case "pairing":
 				if (msg.payload.paired) {
-					if (msg.payload.token) {
-						this.clientToken = msg.payload.token
-						this.pairingCode = undefined
-						this.clientId = msg.payload.clientId
-						void this.onTokenIssued?.(msg.payload.token, this.clientId)
-						this.sendHello()
-					}
-					this.setStatus("paired")
-					this.startHeartbeat()
-					this.flushPending()
+					void this.acceptPairing(msg.payload.clientId, msg.payload.token)
 				} else {
 					this.setStatus("disconnected")
 					if (this.ws) {
@@ -356,9 +356,34 @@ export class RelayClient {
 				break
 			}
 			case "error":
+				if (["AUTH_FAILED", "AUTH_TIMEOUT", "PAIRING_FAILED", "PAIRING_UNAVAILABLE"].includes(msg.payload.code)) {
+					this.terminalAuthFailure = true
+					this.setStatus("disconnected")
+					try { this.ws?.close(4001, msg.payload.code) } catch { /* ignore */ }
+				}
 				break
 			default:
 				break
+		}
+	}
+
+	private async acceptPairing(clientId: string, token?: string): Promise<void> {
+		try {
+			const clientIdChanged = this.clientId !== clientId
+			if (token) {
+				this.clientToken = token
+				this.pairingCode = undefined
+			}
+			this.clientId = clientId
+			if (token || clientIdChanged) await this.onTokenIssued?.(token, clientId)
+			this.sendHello()
+			this.setStatus("paired")
+			this.startHeartbeat()
+			this.flushPending()
+		} catch {
+			this.terminalAuthFailure = true
+			this.setStatus("disconnected")
+			try { this.ws?.close(4001, "credential persistence failed") } catch { /* ignore */ }
 		}
 	}
 

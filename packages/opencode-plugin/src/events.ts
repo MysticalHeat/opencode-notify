@@ -143,6 +143,7 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
 export function buildUpsertMessage(
 	event: UpsertEvent,
 	messageId: string,
+	clientId = event.clientId,
 ): RequestUpsertMessage {
 	return {
 		protocolVersion: 1,
@@ -150,7 +151,7 @@ export function buildUpsertMessage(
 		type: "request_upsert",
 		sentAt: new Date().toISOString(),
 		payload: stripUndefined({
-			clientId: event.clientId,
+			clientId,
 			sessionId: event.sessionId,
 			requestId: event.requestId,
 			expiresAt: event.expiresAt,
@@ -163,6 +164,7 @@ export function buildUpsertMessage(
 export function buildCancelMessage(
 	event: CancelEvent,
 	messageId: string,
+	clientId = event.clientId,
 ): RequestCancelMessage {
 	return {
 		protocolVersion: 1,
@@ -170,7 +172,7 @@ export function buildCancelMessage(
 		type: "request_cancel",
 		sentAt: new Date().toISOString(),
 		payload: {
-			clientId: event.clientId,
+			clientId,
 			sessionId: event.sessionId,
 			requestId: event.requestId,
 		},

@@ -8,6 +8,7 @@ class FakeWebSocket {
 
 	url: string
 	readyState = 0
+	sentMessages: string[] = []
 	private listeners: Record<string, Array<(...args: unknown[]) => void>> = {}
 
 	constructor(url: string) {
@@ -34,7 +35,7 @@ class FakeWebSocket {
 		}
 	}
 
-	send() {}
+	send(data: string) { this.sentMessages.push(data) }
 	close() {
 		this.readyState = FakeWebSocket.CLOSED
 	}
@@ -143,7 +144,9 @@ describe("RelayClient", () => {
 		const client = createClient({ url: "https://relay.example.com" })
 		client.connect()
 		await vi.waitFor(() => expect(fakeWs).not.toBeNull(), { timeout: 200 })
-		expect(fakeWs!.url).toBe("wss://relay.example.com/v1/ws?token=pairing-token-123")
+		expect(fakeWs!.url).toBe("wss://relay.example.com/v1/ws")
+		expect(fakeWs!.sentMessages.join("\n")).toContain('"type":"auth"')
+		expect(fakeWs!.sentMessages.join("\n")).toContain('"token":"pairing-token-123"')
 	})
 
 	it("uses a pairing code once and persists the issued token through its callback", async () => {
@@ -151,7 +154,8 @@ describe("RelayClient", () => {
 		const client = createClient({ pairingCode: "ABCD-1234", onTokenIssued })
 		client.connect()
 		await vi.waitFor(() => expect(fakeWs).not.toBeNull(), { timeout: 200 })
-		expect(fakeWs!.url).toContain("pairing_code=ABCD-1234")
+		expect(fakeWs!.url).not.toContain("pairing_code")
+		expect(fakeWs!.sentMessages.join("\n")).toContain('"pairingCode":"ABCD-1234"')
 		fakeWs!.emit("message", JSON.stringify({
 			protocolVersion: 1,
 			messageId: "pair-token",

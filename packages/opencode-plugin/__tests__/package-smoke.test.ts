@@ -6,10 +6,19 @@ import { tmpdir } from "node:os"
 
 const pkgDir = resolve(__dirname, "..")
 const tmpRoot = join(tmpdir(), `opencode-notify-smoke-${Date.now()}`)
+const COMMAND_TIMEOUT_MS = 120_000
 
 beforeAll(() => {
-  execSync("npm run build", { cwd: pkgDir, stdio: "pipe" })
+  execSync("npm run build", {
+    cwd: pkgDir,
+    stdio: "pipe",
+    timeout: COMMAND_TIMEOUT_MS,
+  })
   mkdirSync(tmpRoot, { recursive: true })
+  writeFileSync(
+    join(tmpRoot, ".npmrc"),
+    "registry=https://registry.npmjs.org/\naudit=false\nfund=false\n",
+  )
 })
 
 afterAll(() => {
@@ -17,7 +26,12 @@ afterAll(() => {
 })
 
 function npmPackFileLines(cwd: string): string[] {
-  const output = execSync("npm pack --dry-run 2>&1", { cwd, encoding: "utf-8", shell: true })
+  const output = execSync("npm pack --dry-run 2>&1", {
+    cwd,
+    encoding: "utf-8",
+    shell: "/bin/sh",
+    timeout: COMMAND_TIMEOUT_MS,
+  })
   const lines = output.split("\n")
   return lines
     .filter((l) => /^npm notice\s+\d+(\.\d+)?\s*k?B\s/.test(l))
@@ -74,6 +88,7 @@ describe("package smoke: npm pack integrity", () => {
       cwd: pkgDir,
       encoding: "utf-8",
       stdio: "pipe",
+      timeout: COMMAND_TIMEOUT_MS,
     })
 
     const tarballEntries = readdirSync(packDest).filter((f) => f.endsWith(".tgz"))
@@ -93,10 +108,18 @@ describe("package smoke: npm pack integrity", () => {
       JSON.stringify({ name: "smoke-test", private: true, type: "module" }, null, 2),
     )
 
-    execSync(`npm install "${tarballPath}"`, {
-      cwd: testProject,
-      stdio: "pipe",
-    })
+    execSync(
+      `npm install --offline --ignore-scripts --no-audit --no-fund --package-lock=false --legacy-peer-deps "${tarballPath}"`,
+      {
+        cwd: testProject,
+        stdio: "pipe",
+        timeout: COMMAND_TIMEOUT_MS,
+        env: {
+          ...process.env,
+          npm_config_userconfig: join(tmpRoot, ".npmrc"),
+        },
+      },
+    )
 
     const entryMjs = join(testProject, "import-test.mjs")
     writeFileSync(
@@ -113,6 +136,7 @@ describe("package smoke: npm pack integrity", () => {
       cwd: testProject,
       encoding: "utf-8",
       stdio: "pipe",
+      timeout: COMMAND_TIMEOUT_MS,
     })
 
     expect(importResult.trim()).toContain("ESM import OK")
@@ -124,6 +148,7 @@ describe("package smoke: no source maps with local paths in dist", () => {
     const mapFiles = execSync("find dist -name '*.map' 2>/dev/null || true", {
       cwd: pkgDir,
       encoding: "utf-8",
+      timeout: COMMAND_TIMEOUT_MS,
     }).trim()
     expect(mapFiles).toBe("")
   })

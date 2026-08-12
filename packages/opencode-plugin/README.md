@@ -10,6 +10,8 @@ npm install @nomli/opencode-notify
 
 Requires `@opencode-ai/plugin` and `@opencode-ai/sdk` as peer dependencies (provided by OpenCode runtime).
 
+Repository: [MysticalHeat/opencode-notify](https://github.com/MysticalHeat/opencode-notify)
+
 ## Usage
 
 ```js

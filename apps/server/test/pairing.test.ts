@@ -113,6 +113,19 @@ describe("pairing code expiry", () => {
 // ─── ONE-TIME CODE CONSUMPTION ────────────────────────────
 
 describe("one-time code consumption", () => {
+  it("does not issue credentials until the plugin has connected", async () => {
+    const { code } = pairingService.generatePairingCode(60_000);
+
+    const result = await pairingService.confirmPairingForConnectedClient(
+      code,
+      AUTHORIZED_USER_ID,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("not connected");
+    expect(repo.listAllClients()).toHaveLength(0);
+  });
+
   it("consumes a code only once", async () => {
     const { code } = pairingService.generatePairingCode(60_000);
 

@@ -97,9 +97,11 @@ All sections are optional. Missing fields are filled from the defaults above.
 
 When relay is enabled without `relay.clientToken`, the plugin requests a
 single-use pairing code from `POST /v1/pairing`, prints it in the OpenCode
-process log, and connects with that temporary code. Send `/pair <code>` to the
-configured Telegram bot. The server returns a bearer token over the TLS WebSocket
-connection; the plugin stores the token and client ID atomically in this file.
+process log, and waits on a TLS WebSocket connection. Send `/pair <code>` to the
+configured Telegram bot. Only that authorized confirmation causes the server to
+issue a bearer token; the plugin then stores the token and client ID atomically
+in this file. Tokens and pairing codes are sent in WebSocket messages, never in
+the WebSocket URL.
 
 ## Environment-variable overrides
 

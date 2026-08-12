@@ -17,6 +17,7 @@ jobs:
   checks:
     name: Build & Check (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       matrix:
         node-version: ["22", "24"]
@@ -65,6 +66,7 @@ jobs:
   docker-smoke:
     name: Docker Smoke Test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Run smoke test

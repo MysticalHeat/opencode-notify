@@ -112,10 +112,10 @@ beforeEach(() => {
 // ─── RED: Tests will fail because app.ts / relay modules don't exist yet ───
 
 describe("WebSocket gateway authentication", () => {
-  it("rejects connection with missing token query param", () => new Promise<void>((done) => {
+  it("rejects relay messages sent before authentication", () => new Promise<void>((done) => {
     const ws = new WebSocket(wsUrl(port, ""));
-    ws.on("error", () => { done(); });
-    ws.on("open", () => { done(new Error("expected connection to be rejected")); });
+    ws.on("close", () => { done(); });
+    ws.on("open", () => ws.send(JSON.stringify(clientMsg("hello", { clientId: "client", sessionId: "session" }))));
   }));
 
   it("rejects connection with invalid token", () => new Promise<void>((done) => {
@@ -141,15 +141,33 @@ describe("WebSocket gateway authentication", () => {
     });
     ws.on("error", (err) => { done(new Error(`unexpected error: ${err.message}`)); });
   }));
+
+  it("authenticates an in-band token without exposing it in the URL", async () => {
+    const client = repo.createClient("in-band-token");
+    const ws = new WebSocket(wsUrl(port, ""));
+    await new Promise<void>((resolve) => ws.on("open", () => resolve()));
+    const response = connectWaitMessage(ws);
+    ws.send(JSON.stringify(clientMsg("auth", { token: "in-band-token" })));
+    const message = await response as { type: string; payload: { clientId: string; token?: string } };
+    expect(message.type).toBe("pairing");
+    expect(message.payload.clientId).toBe(client.id);
+    expect(message.payload.token).toBeUndefined();
+    ws.close();
+  });
 });
 
 describe("WebSocket pairing", () => {
   it("client receives token via pairing message over WebSocket", async () => {
     const { code } = pairingService.generatePairingCode(60_000);
 
-    const ws = new WebSocket(wsUrl(port, `?pairing_code=${code}`));
-    // Wait for the pairing response
-    const msg = await connectWaitMessage(ws, 5000);
+    const ws = new WebSocket(wsUrl(port, ""));
+    await new Promise<void>((resolve) => ws.on("open", () => resolve()));
+    ws.send(JSON.stringify(clientMsg("auth", { pairingCode: code })));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(repo.listAllClients()).toHaveLength(0);
+    const response = connectWaitMessage(ws, 5000);
+    await pairingService.confirmPairingForConnectedClient(code, 123456789);
+    const msg = await response;
     expect(msg).toBeDefined();
     const parsed = msg as Record<string, unknown>;
     expect(parsed.type).toBe("pairing");
@@ -165,9 +183,13 @@ describe("WebSocket pairing", () => {
   it("rejects duplicate pairing code use", async () => {
     const { code } = pairingService.generatePairingCode(60_000);
 
-    // First connection uses the code
-    const ws1 = new WebSocket(wsUrl(port, `?pairing_code=${code}`));
-    const msg1 = await connectWaitMessage(ws1, 5000);
+    const ws1 = new WebSocket(wsUrl(port, ""));
+    await new Promise<void>((resolve) => ws1.on("open", () => resolve()));
+    ws1.send(JSON.stringify(clientMsg("auth", { pairingCode: code })));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const firstResponse = connectWaitMessage(ws1, 5000);
+    await pairingService.confirmPairingForConnectedClient(code, 123456789);
+    const msg1 = await firstResponse;
     expect((msg1 as Record<string, unknown>).type).toBe("pairing");
     ws1.close();
 
@@ -179,8 +201,9 @@ describe("WebSocket pairing", () => {
 
     // Second connection should be rejected (server closes with 4003)
     await new Promise<void>((resolve, reject) => {
-      const ws2 = new WebSocket(wsUrl(port, `?pairing_code=${code}`));
+      const ws2 = new WebSocket(wsUrl(port, ""));
       const timer = setTimeout(() => reject(new Error("timeout waiting for rejection")), 5000);
+      ws2.on("open", () => ws2.send(JSON.stringify(clientMsg("auth", { pairingCode: code }))));
       ws2.on("close", (code) => {
         clearTimeout(timer);
         if (code === 4003) resolve();
@@ -194,12 +217,13 @@ describe("WebSocket pairing", () => {
   });
 
   it("plaintext token is never exposed in error responses during pairing", async () => {
-    // Connect with a non-existent pairing code
+    // Authenticate with a non-existent pairing code.
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(wsUrl(port, `?pairing_code=INVALID`));
+      const ws = new WebSocket(wsUrl(port, ""));
       const timer = setTimeout(() => reject(new Error("timeout")), 5000);
       ws.on("error", () => { clearTimeout(timer); resolve(); });
       ws.on("open", () => {
+        ws.send(JSON.stringify(clientMsg("auth", { pairingCode: "INVALID" })));
         ws.on("message", (data) => {
           const msg = JSON.parse(data.toString());
           expect(msg.type).toBe("error");
@@ -389,7 +413,7 @@ describe("offline outbox and reconnect delivery", () => {
       const timer = setTimeout(() => reject(new Error("timeout waiting for message")), 5000);
       ws.on("message", (data) => {
         const parsed = JSON.parse(data.toString());
-        if (parsed.type !== "heartbeat") {
+        if (parsed.type === "decision") {
           clearTimeout(timer);
           resolve(parsed);
         }

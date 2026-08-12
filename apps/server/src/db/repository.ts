@@ -28,6 +28,8 @@ export interface PairingCodeRow {
   consumedAt: string | null;
   createdAt: string;
   expiresAt: string;
+  confirmedAt: string | null;
+  confirmedByUserId: number | null;
 }
 
 export type RequestStatus =
@@ -166,6 +168,7 @@ export interface Repository {
   createPairingCode(code: string, expiresAt: Date): PairingCodeRow;
   findPairingCodeByCode(code: string): PairingCodeRow | undefined;
   consumePairingCode(code: string, clientId: string): boolean;
+  confirmAndConsumePairingCode(code: string, clientId: string, telegramUserId: number): boolean;
   expirePairingCodes(): number;
 
   // client management
@@ -306,6 +309,8 @@ function mapPairingCode(row: Record<string, unknown>): PairingCodeRow {
     consumedAt: row.consumed_at as string | null,
     createdAt: row.created_at as string,
     expiresAt: row.expires_at as string,
+    confirmedAt: row.confirmed_at as string | null,
+    confirmedByUserId: row.confirmed_by_user_id as number | null,
   };
 }
 
@@ -520,6 +525,18 @@ export function createRepository(db: Database.Database): Repository {
       AND datetime(expires_at) > datetime('now')
   `);
 
+  const confirmAndConsumePairingCodeStmt = db.prepare(`
+    UPDATE pairing_codes
+    SET consumed = 1,
+        consumed_by_client_id = ?,
+        consumed_at = datetime('now'),
+        confirmed_at = datetime('now'),
+        confirmed_by_user_id = ?
+    WHERE code = ?
+      AND consumed = 0
+      AND datetime(expires_at) > datetime('now')
+  `);
+
   const expirePairingCodesStmt = db.prepare(`
     DELETE FROM pairing_codes WHERE datetime(expires_at) <= datetime('now')
   `);
@@ -540,7 +557,9 @@ export function createRepository(db: Database.Database): Repository {
     UPDATE pairing_codes
     SET consumed = 0,
         consumed_by_client_id = NULL,
-        consumed_at = NULL
+        consumed_at = NULL,
+        confirmed_at = NULL,
+        confirmed_by_user_id = NULL
     WHERE code = ?
   `);
 
@@ -852,6 +871,11 @@ export function createRepository(db: Database.Database): Repository {
         const info = consumePairingCodeStmt.run(clientId, code);
         return info.changes > 0;
       })();
+    },
+
+    confirmAndConsumePairingCode(code: string, clientId: string, telegramUserId: number): boolean {
+      confirmAndConsumePairingCodeStmt.run(clientId, telegramUserId, code);
+      return (countChangedStmt.get() as { cnt: number }).cnt === 1;
     },
 
     expirePairingCodes(): number {

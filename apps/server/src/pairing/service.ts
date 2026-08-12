@@ -5,16 +5,28 @@ import type { Repository, ClientRow } from "../db/repository.js";
 
 export interface PairingService {
   generatePairingCode(ttlMs?: number): { code: string; expiresAt: Date };
+  waitForPairingConfirmation(code: string): {
+    success: boolean;
+    wait?: Promise<PairingCredentials>;
+    cancel?: () => void;
+    error?: string;
+  };
+  confirmPairingForConnectedClient(
+    code: string,
+    telegramUserId: number,
+  ): Promise<{ success: boolean; clientId?: string; error?: string }>;
   confirmPairingCode(
     code: string,
     telegramUserId: number,
     onTokenGenerated: (token: string, client: ClientRow) => Promise<void>,
   ): Promise<{ success: boolean; clientId?: string; error?: string }>;
-  confirmPairingFromWs(
-    code: string,
-  ): { success: boolean; clientId?: string; token?: string; error?: string };
   revokeClient(clientId: string, telegramUserId: number): boolean;
   listClients(telegramUserId: number): ClientRow[];
+}
+
+export interface PairingCredentials {
+  clientId: string;
+  token: string;
 }
 
 // ─── Constants ──────────────────────────────────────────
@@ -101,6 +113,53 @@ export function createPairingService(
   authorizedUserId: number,
 ): PairingService {
   const rateLimiter = createRateLimiter();
+  const waiters = new Map<string, (credentials: PairingCredentials) => void>();
+
+  function validateAvailableCode(code: string): { success: true } | { success: false; error: string } {
+    const pairingCode = repo.findPairingCodeByCode(code);
+    if (!pairingCode) return { success: false, error: "invalid pairing code" };
+    if (new Date(pairingCode.expiresAt).getTime() <= Date.now()) {
+      return { success: false, error: "pairing code expired" };
+    }
+    if (pairingCode.consumed === 1) {
+      return { success: false, error: "pairing code already consumed" };
+    }
+    return { success: true };
+  }
+
+  async function confirm(
+    code: string,
+    telegramUserId: number,
+    onTokenGenerated: (token: string, client: ClientRow) => Promise<void>,
+  ): Promise<{ success: boolean; clientId?: string; error?: string }> {
+    if (!isAuthorized(telegramUserId, authorizedUserId)) {
+      return { success: false, error: "unauthorized: not an authorized user" };
+    }
+    if (!rateLimiter.isAllowed(telegramUserId)) {
+      return { success: false, error: "rate limit: too many pairing attempts" };
+    }
+
+    const available = validateAvailableCode(code);
+    if (!available.success) return available;
+
+    const clientId = randomUUID();
+    const token = generateClientToken();
+    if (!repo.confirmAndConsumePairingCode(code, clientId, telegramUserId)) {
+      return { success: false, error: "pairing code already consumed" };
+    }
+
+    const client = repo.createClientWithId(clientId, token);
+    try {
+      await onTokenGenerated(token, client);
+    } catch (callbackErr) {
+      const cbMsg = callbackErr instanceof Error ? callbackErr.message : String(callbackErr);
+      repo.compensateCallbackFailure(clientId, code);
+      return { success: false, error: `callback failed: ${cbMsg}` };
+    }
+
+    rateLimiter.refund(telegramUserId);
+    return { success: true, clientId: client.id };
+  }
 
   return {
     generatePairingCode(ttlMs?: number): { code: string; expiresAt: Date } {
@@ -111,67 +170,47 @@ export function createPairingService(
       return { code, expiresAt };
     },
 
+    waitForPairingConfirmation(code: string) {
+      const available = validateAvailableCode(code);
+      if (!available.success) return available;
+      if (waiters.has(code)) {
+        return { success: false, error: "pairing code is already waiting for confirmation" };
+      }
+
+      let resolveWaiter: ((credentials: PairingCredentials) => void) | undefined;
+      const wait = new Promise<PairingCredentials>((resolve) => {
+        resolveWaiter = resolve;
+      });
+      waiters.set(code, resolveWaiter!);
+
+      return {
+        success: true,
+        wait,
+        cancel: () => {
+          if (waiters.get(code) === resolveWaiter) waiters.delete(code);
+        },
+      };
+    },
+
+    async confirmPairingForConnectedClient(code: string, telegramUserId: number) {
+      const waiter = waiters.get(code);
+      if (!waiter) return { success: false, error: "pairing client is not connected" };
+
+      const result = await confirm(code, telegramUserId, async (token, client) => {
+        waiter({ token, clientId: client.id });
+      });
+      if (result.success || result.error?.includes("consumed") || result.error?.includes("expired")) {
+        waiters.delete(code);
+      }
+      return result;
+    },
+
     async confirmPairingCode(
       code: string,
       telegramUserId: number,
       onTokenGenerated: (token: string, client: ClientRow) => Promise<void>,
     ): Promise<{ success: boolean; clientId?: string; error?: string }> {
-      // Authorization check
-      if (!isAuthorized(telegramUserId, authorizedUserId)) {
-        return { success: false, error: "unauthorized: not an authorized user" };
-      }
-
-      // Rate limiting
-      if (!rateLimiter.isAllowed(telegramUserId)) {
-        return { success: false, error: "rate limit: too many pairing attempts" };
-      }
-
-      // Look up the pairing code
-      const pairingCode = repo.findPairingCodeByCode(code);
-      if (!pairingCode) {
-        return { success: false, error: "invalid pairing code" };
-      }
-
-      // Check expiry
-      if (new Date(pairingCode.expiresAt).getTime() <= Date.now()) {
-        return { success: false, error: "pairing code expired" };
-      }
-
-      // Check consumed
-      if (pairingCode.consumed === 1) {
-        return { success: false, error: "pairing code already consumed" };
-      }
-
-      // Pre-generate client identity and token
-      const clientId = randomUUID();
-      const token = generateClientToken();
-
-      // Atomically consume the pairing code (CAS)
-      const consumed = repo.consumePairingCode(code, clientId);
-      if (!consumed) {
-        // Race condition: someone else consumed it between check and now.
-        // No client was created yet, so no orphan to clean up.
-        return { success: false, error: "pairing code already consumed" };
-      }
-
-      // Create the client now that CAS succeeded
-      const client = repo.createClientWithId(clientId, token);
-
-      // Hand off token via callback — with compensating cleanup on failure
-      try {
-        await onTokenGenerated(token, client);
-      } catch (callbackErr) {
-        const cbMsg =
-          callbackErr instanceof Error ? callbackErr.message : String(callbackErr);
-        // Atomic compensating cleanup: remove the client and unconsume the code
-        repo.compensateCallbackFailure(clientId, code);
-        return { success: false, error: `callback failed: ${cbMsg}` };
-      }
-
-      // Successful pairing: refund rate limit budget
-      rateLimiter.refund(telegramUserId);
-
-      return { success: true, clientId: client.id };
+      return confirm(code, telegramUserId, onTokenGenerated);
     },
 
     revokeClient(
@@ -189,35 +228,6 @@ export function createPairingService(
         throw new Error("unauthorized: not an authorized user");
       }
       return repo.listAllClients();
-    },
-
-    confirmPairingFromWs(
-      code: string,
-    ): { success: boolean; clientId?: string; token?: string; error?: string } {
-      const pairingCode = repo.findPairingCodeByCode(code);
-      if (!pairingCode) {
-        return { success: false, error: "invalid pairing code" };
-      }
-
-      if (new Date(pairingCode.expiresAt).getTime() <= Date.now()) {
-        return { success: false, error: "pairing code expired" };
-      }
-
-      if (pairingCode.consumed === 1) {
-        return { success: false, error: "pairing code already consumed" };
-      }
-
-      const clientId = randomUUID();
-      const token = generateClientToken();
-
-      const consumed = repo.consumePairingCode(code, clientId);
-      if (!consumed) {
-        return { success: false, error: "pairing code already consumed" };
-      }
-
-      repo.createClientWithId(clientId, token);
-
-      return { success: true, clientId, token };
     },
   };
 }

@@ -15,10 +15,10 @@ interface GatewayOptions {
     heartbeatTimeoutMs: number;
   };
   pairingService?: {
-    confirmPairingFromWs: (code: string) => {
+    waitForPairingConfirmation: (code: string) => {
       success: boolean;
-      clientId?: string;
-      token?: string;
+      wait?: Promise<{ clientId: string; token: string }>;
+      cancel?: () => void;
       error?: string;
     };
   };
@@ -31,6 +31,9 @@ interface WsConnection {
   close: (code?: number, reason?: string) => void;
 }
 
+const AUTH_TIMEOUT_MS = 15_000;
+const PAIRING_WAIT_TIMEOUT_MS = 5 * 60_000;
+
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
@@ -39,88 +42,47 @@ export function createGatewayHandler(options: GatewayOptions) {
   const { repo, registry, dispatch, config, pairingService, botAdapter } = options;
 
   return function wsHandler(connection: WsConnection, request: { url?: string }): void {
-    const url = new URL(request.url ?? "/", "ws://localhost");
-    const token = url.searchParams.get("token");
-    const pairingCode = url.searchParams.get("pairing_code");
-
+    const legacyToken = new URL(request.url ?? "/", "ws://localhost").searchParams.get("token");
     let clientId: string | null = null;
-
-    // ── Pairing code flow ──
-    if (pairingCode && !token) {
-      if (!pairingService) {
-        connection.send(JSON.stringify(errorMsg("PAIRING_UNAVAILABLE", "pairing not available")));
-        connection.close(4003, "pairing not available");
-        return;
+    let cancelPairingWait: (() => void) | undefined;
+    let authenticated = false;
+    let authTimer = setTimeout(() => {
+      if (!authenticated) {
+        connection.send(JSON.stringify(errorMsg("AUTH_TIMEOUT", "authentication timed out")));
+        connection.close(4003, "authentication timed out");
       }
+    }, AUTH_TIMEOUT_MS);
 
-      const result = pairingService.confirmPairingFromWs(pairingCode);
-      if (!result.success || !result.clientId || !result.token) {
-        connection.send(JSON.stringify(errorMsg("PAIRING_FAILED", result.error ?? "invalid pairing code")));
-        connection.close(4003, result.error ?? "invalid pairing code");
-        return;
-      }
-
-      clientId = result.clientId;
+    function authenticate(id: string, token?: string): void {
+      if (authenticated) return;
+      authenticated = true;
+      clientId = id;
+      clearTimeout(authTimer);
       const sessionId = randomUUID();
-      const pairingMsg = {
+      registry.register(id, sessionId, connection, (registeredId) => {
+        registry.unregister(registeredId);
+      });
+      repo.updateLastSeen(id);
+      connection.send(JSON.stringify({
         protocolVersion: 1,
         messageId: randomUUID(),
         sentAt: new Date().toISOString(),
         type: "pairing",
-        payload: {
-          clientId: result.clientId,
-          sessionId,
-          paired: true,
-          token: result.token,
-        },
-      };
-
-      connection.send(JSON.stringify(pairingMsg));
-
-      registry.register(result.clientId, sessionId, connection, (id) => {
-        registry.unregister(id);
-      });
-
-      const tokenHash = hashToken(result.token);
-      const client = repo.findClientByTokenHash(tokenHash);
-      if (client) {
-        repo.updateLastSeen(client.id);
-      }
+        payload: { clientId: id, sessionId, paired: true, ...(token ? { token } : {}) },
+      }));
+      dispatch.dispatchPending(id).catch(() => {});
     }
 
-    // ── Token auth flow ──
-    if (token && !pairingCode) {
-      const tokenHashVal = hashToken(token);
-      const client = repo.findClientByTokenHash(tokenHashVal);
-
+    // Preserve existing token-only clients for one migration cycle. New clients
+    // authenticate in-band and never place credentials in their connection URL.
+    if (legacyToken) {
+      const client = repo.findClientByTokenHash(hashToken(legacyToken));
       if (!client) {
         connection.send(JSON.stringify(errorMsg("AUTH_FAILED", "invalid token")));
         connection.close(4003, "invalid token");
         return;
       }
-
-      clientId = client.id;
-
-      // Register immediately with a placeholder session
-      registry.register(client.id, "pending", connection, (id) => {
-        registry.unregister(id);
-      });
-
-      repo.updateLastSeen(client.id);
-    }
-
-    // ── Reject unauthenticated ──
-    if (!clientId) {
-      connection.send(JSON.stringify(errorMsg("AUTH_REQUIRED", "authentication required")));
-      connection.close(4003, "authentication required");
-      return;
-    }
-
-    const cid = clientId;
-
-    // ── Dispatch pending outbox on connect (for token auth) ──
-    if (token) {
-      dispatch.dispatchPending(cid).catch(() => {});
+      authenticate(client.id);
     }
 
     // ── Message handler ──
@@ -141,15 +103,68 @@ export function createGatewayHandler(options: GatewayOptions) {
         return;
       }
 
-      handleMessage(cid, msg);
+      if (!authenticated) {
+        if (msg.type !== "auth") {
+          connection.send(JSON.stringify(errorMsg("AUTH_REQUIRED", "authenticate before sending relay messages")));
+          connection.close(4003, "authentication required");
+          return;
+        }
+
+        if (msg.payload.token) {
+          const client = repo.findClientByTokenHash(hashToken(msg.payload.token));
+          if (!client) {
+            connection.send(JSON.stringify(errorMsg("AUTH_FAILED", "invalid token")));
+            connection.close(4003, "invalid token");
+            return;
+          }
+          authenticate(client.id);
+          return;
+        }
+
+        if (!pairingService || !msg.payload.pairingCode) {
+          connection.send(JSON.stringify(errorMsg("PAIRING_UNAVAILABLE", "pairing not available")));
+          connection.close(4003, "pairing not available");
+          return;
+        }
+
+        const waiting = pairingService.waitForPairingConfirmation(msg.payload.pairingCode);
+        if (!waiting.success || !waiting.wait) {
+          connection.send(JSON.stringify(errorMsg("PAIRING_FAILED", waiting.error ?? "invalid pairing code")));
+          connection.close(4003, waiting.error ?? "invalid pairing code");
+          return;
+        }
+        clearTimeout(authTimer);
+        authTimer = setTimeout(() => {
+          connection.send(JSON.stringify(errorMsg("PAIRING_FAILED", "pairing confirmation timed out")));
+          connection.close(4003, "pairing confirmation timed out");
+        }, PAIRING_WAIT_TIMEOUT_MS);
+        cancelPairingWait = waiting.cancel;
+        waiting.wait.then(({ clientId: issuedClientId, token }) => {
+          cancelPairingWait = undefined;
+          authenticate(issuedClientId, token);
+        }).catch(() => {
+          connection.send(JSON.stringify(errorMsg("PAIRING_FAILED", "pairing failed")));
+          connection.close(4003, "pairing failed");
+        });
+        return;
+      }
+
+      if (msg.type === "auth") {
+        connection.send(JSON.stringify(errorMsg("PROTOCOL_VIOLATION", "connection is already authenticated")));
+        return;
+      }
+      handleMessage(clientId!, msg);
     });
 
     // ── Close handler ──
     connection.on("close", () => {
-      registry.unregister(cid);
+      clearTimeout(authTimer);
+      cancelPairingWait?.();
+      if (clientId) registry.unregister(clientId);
     });
 
     function handleMessage(id: string, msg: ClientMessage): void {
+      if (msg.type === "auth") return;
       const msgType = msg.type;
 
       if (msg.payload.clientId !== id) {

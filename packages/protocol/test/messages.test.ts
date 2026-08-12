@@ -45,19 +45,21 @@ describe("parseClientMessage (valid)", () => {
     });
   });
 
-  it("parses a pairing message", () => {
-    const input = readFixture("valid-client-pairing.json");
+  it("parses a token authentication message", () => {
+    const input = {
+      protocolVersion: 1,
+      messageId: "msg-0003-cccc-dddd-eeee",
+      type: "auth",
+      sentAt: "2025-07-11T12:00:01.000Z",
+      payload: { token: "client-token" },
+    };
     const result = parseClientMessage(input);
     expect(result).toEqual({
       protocolVersion: 1,
       messageId: "msg-0003-cccc-dddd-eeee",
-      type: "pairing",
+      type: "auth",
       sentAt: "2025-07-11T12:00:01.000Z",
-      payload: {
-        clientId: "client-opencode-001",
-        sessionId: "session-abc123",
-        pairingCode: "123456",
-      },
+      payload: { token: "client-token" },
     });
   });
 

@@ -4,7 +4,13 @@ import type Database from "better-sqlite3";
 import type { Repository } from "./db/repository.js";
 import type { PairingService } from "./pairing/service.js";
 import type { BotAdapter } from "./telegram/bot.js";
-import { healthLiveHandler, healthReadyHandler, setDbReady, setBotReady } from "./health.js";
+import {
+  healthLiveHandler,
+  healthReadyHandler,
+  setBotReady,
+  setDbReady,
+  setSchemaReady,
+} from "./health.js";
 import { createConnectionRegistry } from "./relay/connections.js";
 import { createDispatchService } from "./relay/dispatch.js";
 import { createGatewayHandler } from "./relay/gateway.js";
@@ -23,16 +29,21 @@ export interface AppOptions {
   config: AppConfig;
   pairingService?: PairingService;
   botAdapter?: BotAdapter;
-  ready?: { dbReady: boolean; botReady: boolean };
+  ready?: {
+    dbReady: boolean;
+    botReady: boolean;
+    schemaReady?: boolean;
+  };
 }
 
 export async function createApp(options: AppOptions): Promise<ReturnType<typeof Fastify>> {
   const { repo, config, pairingService, botAdapter, ready } = options;
 
   setDbReady(ready?.dbReady ?? false);
+  setSchemaReady(ready?.schemaReady ?? ready?.dbReady ?? false);
   setBotReady(ready?.botReady ?? false);
 
-  const app = Fastify({ logger: { level: config.loggingLevel } });
+  const app = Fastify({ logger: { level: config.loggingLevel, redact: ["req.url"] } });
   const pairingAttempts = new Map<string, number[]>();
   await app.register(fastifyWebsocket, {
     options: { maxPayload: config.maxMessageBytes },
@@ -56,7 +67,7 @@ export async function createApp(options: AppOptions): Promise<ReturnType<typeof 
     },
     pairingService: pairingService
       ? {
-          confirmPairingFromWs: pairingService.confirmPairingFromWs.bind(pairingService),
+          waitForPairingConfirmation: pairingService.waitForPairingConfirmation.bind(pairingService),
         }
       : undefined,
     botAdapter,

@@ -6,7 +6,7 @@ import { createRepository } from "./db/repository.js";
 import { createPairingService } from "./pairing/service.js";
 import { createBotAdapter, type BotAdapter } from "./telegram/bot.js";
 import { createApp, type AppConfig } from "./app.js";
-import { setDbReady, setBotReady } from "./health.js";
+import { setBotReady, setDbReady, setSchemaReady } from "./health.js";
 
 const FAKE_TOKEN = "FAKE";
 
@@ -17,6 +17,7 @@ async function main() {
   runMigrations(db);
   const repo = createRepository(db);
   setDbReady(true);
+  setSchemaReady(true);
 
   const pairingService = createPairingService(repo, config.telegram.userId);
 
@@ -35,8 +36,8 @@ async function main() {
 
   const appConfig: AppConfig = {
     tokenAuth: true,
-    heartbeatIntervalMs: 300,
-    heartbeatTimeoutMs: 10_000,
+    heartbeatIntervalMs: 30_000,
+    heartbeatTimeoutMs: 90_000,
     maxMessageBytes: 65_536,
     loggingLevel: (process.env.LOGGING_LEVEL as string) ?? "info",
   };
@@ -47,7 +48,11 @@ async function main() {
     config: appConfig,
     pairingService,
     botAdapter,
-    ready: { dbReady: true, botReady: isFakeTelegram },
+    ready: {
+      dbReady: true,
+      schemaReady: true,
+      botReady: isFakeTelegram,
+    },
   });
 
   if (botAdapter && !isFakeTelegram) {
@@ -75,6 +80,7 @@ async function main() {
     }
     setBotReady(false);
     setDbReady(false);
+    setSchemaReady(false);
     close();
     process.exit(0);
   };

@@ -35,7 +35,7 @@ docker run -d --name "$CONTAINER" \
 echo "[4/6] Waiting for readiness..."
 READY=false
 for i in $(seq 1 30); do
-  if curl -sf "http://localhost:$PORT/health/live" >/dev/null 2>&1; then
+  if curl -sf "http://localhost:$PORT/health/ready" >/dev/null 2>&1; then
     READY=true
     echo "  Server ready after ${i}s"
     break
@@ -49,7 +49,7 @@ if [ "$READY" != "true" ]; then
   exit 1
 fi
 
-HEALTH=$(curl -sf "http://localhost:$PORT/health/live")
+HEALTH=$(curl -sf "http://localhost:$PORT/health/ready")
 if [ "$(echo "$HEALTH" | jq -r '.status')" != "ok" ]; then
   echo "ERROR: Health endpoint returned unexpected: $HEALTH"
   exit 1
@@ -79,7 +79,7 @@ echo "[6/6] Verifying restart with the persisted volume..."
 docker start "$CONTAINER"
 READY=false
 for i in $(seq 1 30); do
-  if curl -sf "http://localhost:$PORT/health/live" >/dev/null 2>&1; then
+  if curl -sf "http://localhost:$PORT/health/ready" >/dev/null 2>&1; then
     READY=true
     break
   fi

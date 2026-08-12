@@ -14,7 +14,7 @@ export {
 export type {
   HelloMessage,
   HeartbeatMessage,
-  PairingMessage,
+  AuthMessage,
   RequestUpsertMessage,
   RequestCancelMessage,
   ClientMessage,

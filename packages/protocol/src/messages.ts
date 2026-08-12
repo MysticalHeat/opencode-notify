@@ -71,14 +71,18 @@ const heartbeatMessageSchema = z.object({
   }),
 });
 
-const pairingMessageSchema = z.object({
+const authMessageSchema = z.object({
   ...envelopeBase,
-  type: z.literal("pairing"),
-  payload: z.object({
-    clientId: clientIdField,
-    sessionId: sessionIdField,
-    pairingCode: z.string().min(1).max(MAX_PAIRING_CODE_LENGTH),
-  }),
+  type: z.literal("auth"),
+  payload: z
+    .object({
+      token: z.string().min(1).max(MAX_ID_LENGTH).optional(),
+      pairingCode: z.string().min(1).max(MAX_PAIRING_CODE_LENGTH).optional(),
+    })
+    .refine(
+      (payload) => (payload.token !== undefined) !== (payload.pairingCode !== undefined),
+      { message: "auth payload must contain exactly one of 'token' or 'pairingCode'" },
+    ),
 });
 
 const questionPayloadSchema = z.object({
@@ -182,9 +186,9 @@ const applyResultMessageSchema = z.object({
 });
 
 const clientMessageSchema = z.discriminatedUnion("type", [
+  authMessageSchema,
   helloMessageSchema,
   heartbeatMessageSchema,
-  pairingMessageSchema,
   requestUpsertMessageSchema,
   requestCancelMessageSchema,
   applyResultMessageSchema,
@@ -212,7 +216,7 @@ const serverMessageSchema = z.discriminatedUnion("type", [
 
 export type HelloMessage = z.infer<typeof helloMessageSchema>;
 export type HeartbeatMessage = z.infer<typeof heartbeatMessageSchema>;
-export type PairingMessage = z.infer<typeof pairingMessageSchema>;
+export type AuthMessage = z.infer<typeof authMessageSchema>;
 export type RequestUpsertMessage = z.infer<typeof requestUpsertMessageSchema>;
 export type RequestCancelMessage = z.infer<typeof requestCancelMessageSchema>;
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
