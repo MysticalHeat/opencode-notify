@@ -63,6 +63,13 @@ jobs:
       - name: Validate workflow files
         run: node scripts/validate-workflows.mjs
 
+      - name: Validate production Compose configuration
+        env:
+          RELAY_IMAGE_REF: ghcr.io/mysticalheat/opencode-notify-server@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          TELEGRAM_BOT_TOKEN: FAKE
+          TELEGRAM_USER_ID: "123456789"
+        run: docker compose -f deploy/compose.nomlihost.yml config --quiet
+
   docker-smoke:
     name: Docker Smoke Test
     runs-on: ubuntu-latest

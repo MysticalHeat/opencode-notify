@@ -16,6 +16,7 @@ WORKDIR /app
 COPY --from=build --chown=appuser:appgroup /app/node_modules node_modules
 COPY --from=build --chown=appuser:appgroup /app/apps/server/dist apps/server/dist
 COPY --from=build --chown=appuser:appgroup /app/apps/server/migrations apps/server/migrations
+COPY --from=build --chown=appuser:appgroup /app/apps/server/scripts apps/server/scripts
 COPY --from=build --chown=appuser:appgroup /app/apps/server/package.json apps/server/package.json
 COPY --from=build --chown=appuser:appgroup /app/packages/core/dist packages/core/dist
 COPY --from=build --chown=appuser:appgroup /app/packages/core/package.json packages/core/package.json

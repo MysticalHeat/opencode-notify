@@ -1,6 +1,6 @@
 services:
   relay:
-    image: ghcr.io/mysticalheat/opencode-notify-server:${RELAY_IMAGE_TAG:?set an immutable release tag}
+    image: ${RELAY_IMAGE_REF:?set an immutable image reference}
     container_name: opencode-notify
     restart: unless-stopped
     init: true
@@ -41,6 +41,8 @@ services:
 
 volumes:
   relay-data:
+    name: opencode-notify_relay-data
+    external: true
 
 networks:
   proxy:

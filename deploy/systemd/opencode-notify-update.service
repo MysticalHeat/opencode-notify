@@ -1,0 +1,8 @@
+[Unit]
+Description=Update the OpenCode notification plugin when OpenCode is stopped
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/workspace/opencode-notify
+ExecStart=/usr/bin/bash %h/workspace/opencode-notify/scripts/update-opencode-notify.sh
+Nice=10

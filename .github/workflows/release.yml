@@ -3,33 +3,72 @@ name: Release
 on:
   release:
     types: [published]
-  workflow_dispatch: {}
 
 permissions:
   contents: read
   packages: write
-  attestations: write
   id-token: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: production-release
   cancel-in-progress: false
 
 jobs:
-  publish-server-image:
-    name: Publish relay server image to GHCR
+  verify:
+    name: Verify release
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+
+      - name: Verify tag and package version
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./packages/opencode-plugin/package.json').version")"
+          test "$RELEASE_TAG" = "v$version"
+          test "$version" != "0.0.0"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify plugin tarball
+        working-directory: packages/opencode-plugin
+        run: npm pack --dry-run
+
+  publish-server-image:
+    name: Publish relay image
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      image_ref: ghcr.io/mysticalheat/opencode-notify-server@${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push server image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -42,3 +81,84 @@ jobs:
             org.opencontainers.image.source=https://github.com/MysticalHeat/opencode-notify
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ github.event.release.tag_name }}
+
+  deploy-relay:
+    name: Deploy relay
+    needs: publish-server-image
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Configure deploy SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Upload deployment definition
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          IMAGE_REF: ${{ needs.publish-server-image.outputs.image_ref }}
+        run: |
+          set -euo pipefail
+          printf 'RELAY_IMAGE_REF=%s\n' "$IMAGE_REF" > deploy/release.env
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'install -d -m 700 /opt/opencode-notify'
+          scp deploy/compose.nomlihost.yml deploy/release.env "$DEPLOY_USER@$DEPLOY_HOST:/opt/opencode-notify/"
+
+      - name: Back up and deploy relay
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          IMAGE_REF: ${{ needs.publish-server-image.outputs.image_ref }}
+        run: |
+          set -euo pipefail
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "IMAGE_REF='$IMAGE_REF' bash -s" <<'REMOTE'
+          set -euo pipefail
+          docker pull "$IMAGE_REF"
+          docker run --rm \
+            -v opencode-notify_relay-data:/data \
+            -e DATABASE_PATH=/data/opencode-notify.db \
+            "$IMAGE_REF" node apps/server/scripts/backup-database.mjs
+          docker compose \
+            --project-name opencode-notify \
+            --env-file /opt/opencode-notify/nomlihost.env \
+            --env-file /opt/opencode-notify/release.env \
+            -f /opt/opencode-notify/compose.nomlihost.yml \
+            up -d --no-build --force-recreate --wait --wait-timeout 120 relay
+          REMOTE
+
+      - name: Verify public readiness
+        run: curl --fail --retry 10 --retry-connrefused --retry-delay 3 https://relay.nomli-com.ru/health/ready
+
+  publish-plugin:
+    name: Publish plugin to npmjs
+    needs: [verify, deploy-relay]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Publish package with provenance
+        working-directory: packages/opencode-plugin
+        run: npm publish --provenance

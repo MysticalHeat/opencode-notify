@@ -2,39 +2,22 @@
 
 ## Package registry setup
 
-The `@nomli/opencode-notify` package is published to **GitHub Packages** at
-`https://npm.pkg.github.com`. Consumers must configure npm to use this registry
-for the `@nomli` scope.
+The `@nomli/opencode-notify` package is published publicly to npmjs.org. No
+package token or registry override is required to install it.
 
-### ~/.npmrc scope mapping
+### Migrating from GitHub Packages
 
-Create or edit `~/.npmrc` (in your home directory, **not** in the project):
+Older installations may have this mapping in `~/.npmrc`:
 
 ```
 @nomli:registry=https://npm.pkg.github.com
 ```
 
-This tells npm to resolve any `@nomli/*` package from GitHub Packages instead
-of the default npmjs.org registry.
+Remove it before installing from npmjs:
 
-### PAT classic authentication
-
-GitHub Packages requires a **personal access token (classic)** with the
-`read:packages` scope. Fine-grained tokens with **only** `packages:read` are
-also supported on org-owned repositories if enabled.
-
-1. Go to **GitHub → Settings → Developer settings → Personal access tokens →
-   Tokens (classic)**.
-2. Generate a new token with the **`read:packages`** scope.
-3. Append the following line to `~/.npmrc`:
-
+```bash
+npm config delete @nomli:registry --location=user
 ```
-//npm.pkg.github.com/:_authToken=ghp_YOUR_TOKEN_HERE
-```
-
-**Security:** Never commit `~/.npmrc` or any file containing a token to version
-control. The repository's `.npmrc` contains only the scope-to-registry mapping
-and no credentials.
 
 ### Verifying the setup
 
@@ -42,8 +25,7 @@ and no credentials.
 npm view @nomli/opencode-notify versions
 ```
 
-If this command lists available versions without an authentication error, the
-registry and token are configured correctly.
+If this command lists available versions, npm is configured correctly.
 
 ---
 
@@ -51,15 +33,14 @@ registry and token are configured correctly.
 
 ### Pinned release version
 
-Install the latest published release:
+Install an exact published release:
 
 ```bash
-npm install @nomli/opencode-notify@<published-version>
+opencode plugin @nomli/opencode-notify@<published-version> --global
 ```
 
-Always pin to an exact version using `@<published-version>`. Ranges are not
-recommended because GitHub Packages may throttle unauthenticated metadata
-requests that npm uses during version resolution.
+Always pin to an exact version. OpenCode caches npm plugin resolutions, so a
+bare package name or `@latest` does not reliably update an existing install.
 
 ### Local file development
 
@@ -94,14 +75,11 @@ npm link @nomli/opencode-notify
 ## Update
 
 ```bash
-# Check current installed version
-npm list @nomli/opencode-notify
-
 # View available versions
 npm view @nomli/opencode-notify versions
 
-# Install a specific version
-npm install @nomli/opencode-notify@0.1.0
+# Install a specific version and replace the configured pin
+opencode plugin @nomli/opencode-notify@0.1.0 --global --force
 ```
 
 **Restart required:** OpenCode must be restarted after any plugin
@@ -113,13 +91,13 @@ startup and does not hot-reload them while OpenCode is running.
 ## Rollback
 
 ```bash
-npm install @nomli/opencode-notify@<previous-version>
+opencode plugin @nomli/opencode-notify@<previous-version> --global --force
 ```
 
 Then restart OpenCode.
 
 If the previous version is unknown, check git history or the release page at
-`https://github.com/nomli/opencode-notify/releases`.
+`https://github.com/MysticalHeat/opencode-notify/releases`.
 
 ---
 
@@ -211,6 +189,36 @@ state appears stale:
 
 ## Deploying the relay server
 
+### Release pipeline
+
+A GitHub Release named `vX.Y.Z` is the production trigger. The workflow
+verifies the package version, builds an immutable GHCR image, backs up SQLite,
+deploys the relay, verifies public readiness, and only then publishes
+`@nomli/opencode-notify@X.Y.Z` to npmjs.
+
+Before enabling the workflow, create the `production` GitHub Environment and
+configure these secrets and variables:
+
+| Name | Type | Purpose |
+|---|---|---|
+| `DEPLOY_SSH_KEY` | secret | Private key for the restricted deploy user on the VPS |
+| `DEPLOY_KNOWN_HOSTS` | secret | Pinned SSH host key for the VPS |
+| `DEPLOY_HOST` | variable | VPS hostname or IP address |
+| `DEPLOY_USER` | variable | Restricted SSH deploy user |
+
+The Telegram token does not enter GitHub Actions. Store it only on the VPS in
+`/opt/opencode-notify/nomlihost.env` with mode `0600`:
+
+```dotenv
+TELEGRAM_BOT_TOKEN=replace-with-a-rotated-token
+TELEGRAM_USER_ID=340311718
+```
+
+The deploy user must be allowed to run Docker and write only
+`/opt/opencode-notify`. Docker daemon access is effectively root-equivalent, so
+use a dedicated SSH key, pin the host key, and require an approval rule for the
+production environment.
+
 ### Published GHCR image
 
 The release workflow publishes the relay server image to
@@ -231,13 +239,13 @@ echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_USER" --password-s
 Run these commands from a checkout containing `deploy/compose.example.yml`:
 
 ```bash
-export RELAY_IMAGE_TAG=release-v0.0.1
-docker pull "ghcr.io/mysticalheat/opencode-notify-server:$RELAY_IMAGE_TAG"
+export RELAY_IMAGE_REF=ghcr.io/mysticalheat/opencode-notify-server:release-v0.0.1
+docker pull "$RELAY_IMAGE_REF"
 docker compose -f deploy/compose.example.yml up -d --no-build --force-recreate relay
 curl -fsS http://localhost:3000/health/ready
 ```
 
-Keep the selected `RELAY_IMAGE_TAG` value in the deployment record.
+Keep the selected image digest in the deployment record.
 
 #### Roll back
 
@@ -245,15 +253,24 @@ Select the previous release tag or a known-good full SHA tag, then repeat the
 same pull and restart procedure:
 
 ```bash
-export RELAY_IMAGE_TAG=sha-<known-good-full-commit-sha>
-docker pull "ghcr.io/mysticalheat/opencode-notify-server:$RELAY_IMAGE_TAG"
+export RELAY_IMAGE_REF=ghcr.io/mysticalheat/opencode-notify-server:sha-<known-good-full-commit-sha>
+docker pull "$RELAY_IMAGE_REF"
 docker compose -f deploy/compose.example.yml up -d --no-build --force-recreate relay
 curl -fsS http://localhost:3000/health/ready
 ```
 
 Review `docker compose -f deploy/compose.example.yml logs --tail=100 relay`
 after the restart. The Compose volume is preserved, so the SQLite database and
-pairings remain available during an image rollback.
+pairings remain available during an image rollback. Do not roll back across a
+SQLite schema migration without restoring the pre-deploy backup: older images
+reject newer schemas.
+
+### Automated rollback
+
+Run the `Roll Back Relay` GitHub Actions workflow with an immutable image digest
+or known-good `release-vX.Y.Z` tag. It redeploys the existing production volume
+and waits for the health check. Restore the pre-deploy backup rather than doing
+a plain image rollback when the failed release migrated SQLite.
 
 ### Container image
 
@@ -359,6 +376,24 @@ endpoint.
 
 Note: `drop_pending_updates=true` discards updates queued during the
 transition to avoid replay storms.
+
+---
+
+## Deferred plugin updater (Linux)
+
+The updater checks npmjs hourly, but never interrupts an active OpenCode
+process. It installs a new exact version after OpenCode is closed; the next
+normal OpenCode start loads it.
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/opencode-notify-update.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now opencode-notify-update.timer
+```
+
+The included unit assumes the checkout is at `~/workspace/opencode-notify`.
+Adjust `WorkingDirectory` and `ExecStart` if it lives elsewhere.
 
 ---
 

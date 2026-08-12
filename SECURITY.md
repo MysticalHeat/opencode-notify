@@ -39,11 +39,9 @@ This policy covers:
 - Dependencies are pinned in `package-lock.json`.
 - CI enforces lockfile integrity via `npm ci`.
 - Dependabot is configured for weekly automated updates.
-- Publishes to GitHub Packages use repository-scoped `GITHUB_TOKEN` — no
-  long-lived publish secrets.
-- Releases use `npm publish --provenance` for build attestations. This
-  requires `id-token: write` and `attestations: write` permissions at the
-  repository/org level. If provenance generation fails (e.g., attestations
-  disabled at the org level), the publish job fails explicitly — failures
-  are never hidden. Repo/org maintainers must ensure attestation support is
-  enabled before publishing.
+- The public npm package uses trusted publishing and `npm publish --provenance`.
+  No long-lived npm publish token is stored in GitHub.
+- The release workflow requires `id-token: write`; provenance failures are not
+  hidden and stop the release.
+- The relay Telegram token is stored only in the VPS environment file. Rotate
+  it immediately if it appears in terminal output, logs, or an image layer.

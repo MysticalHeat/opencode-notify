@@ -6,6 +6,7 @@ coverage/
 .env.*
 !.env.example
 !**/.env.example
+deploy/nomlihost.env
 *.db
 *.sqlite
 *.sqlite3
