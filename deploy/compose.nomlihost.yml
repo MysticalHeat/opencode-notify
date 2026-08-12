@@ -1,0 +1,47 @@
+services:
+  relay:
+    image: ghcr.io/mysticalheat/opencode-notify-server:${RELAY_IMAGE_TAG:?set an immutable release tag}
+    container_name: opencode-notify
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:exec
+    environment:
+      SERVER_HOST: "0.0.0.0"
+      SERVER_PORT: "3000"
+      PUBLIC_BASE_URL: "https://relay.nomli-com.ru"
+      DATABASE_PATH: "/data/opencode-notify.db"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:?set Telegram bot token}"
+      TELEGRAM_USER_ID: "${TELEGRAM_USER_ID:?set Telegram user ID}"
+      LOGGING_LEVEL: "info"
+    volumes:
+      - relay-data:/data
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.opencode-notify.rule=Host(`relay.nomli-com.ru`)"
+      - "traefik.http.routers.opencode-notify.entrypoints=websecure"
+      - "traefik.http.routers.opencode-notify.tls=true"
+      - "traefik.http.routers.opencode-notify.tls.certresolver=le"
+      - "traefik.http.services.opencode-notify.loadbalancer.server.port=3000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  relay-data:
+
+networks:
+  proxy:
+    external: true

@@ -16,56 +16,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Publish @nomli/opencode-notify to GitHub Packages
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          registry-url: https://npm.pkg.github.com
-
-      - run: npm ci
-
-      - name: Apply pending changesets
-        run: npx changeset version
-
-      - name: Verify publish version
-        working-directory: packages/opencode-plugin
-        run: |
-          set -euo pipefail
-          version="$(node -p "require('./package.json').version")"
-          if [ "$version" = "0.0.0" ]; then
-            echo "::error::Refusing to publish the unreleased 0.0.0 package version"
-            exit 1
-          fi
-          echo "Publishing @nomli/opencode-notify@$version"
-
-      - run: npm run build
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm run test
-
-      - name: Publish
-        working-directory: packages/opencode-plugin
-        run: |
-          set -e
-          echo "::group::npm publish --provenance"
-          npm publish --provenance
-          echo "::endgroup::"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify published package
-        working-directory: packages/opencode-plugin
-        run: npm view @nomli/opencode-notify version dist.tarball
-
   publish-server-image:
     name: Publish relay server image to GHCR
-    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
