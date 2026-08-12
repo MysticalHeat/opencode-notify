@@ -1,9 +1,6 @@
 services:
   relay:
-    build:
-      context: ..
-      dockerfile: apps/server/Dockerfile
-    image: opencode-notify:latest
+    image: ghcr.io/mysticalheat/opencode-notify-server:${RELAY_IMAGE_TAG:?set an immutable release tag}
     container_name: opencode-notify
     restart: unless-stopped
     init: true
@@ -29,7 +26,7 @@ services:
     volumes:
       - relay-data:/data
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:3000/health/live"]
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/health/ready"]
       interval: 15s
       timeout: 5s
       retries: 3

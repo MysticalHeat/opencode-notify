@@ -54,10 +54,10 @@ registry and token are configured correctly.
 Install the latest published release:
 
 ```bash
-npm install @nomli/opencode-notify@0.0.0
+npm install @nomli/opencode-notify@<published-version>
 ```
 
-Always pin to an exact version using `@<version>`. Ranges (`^0.0.0`) are not
+Always pin to an exact version using `@<published-version>`. Ranges are not
 recommended because GitHub Packages may throttle unauthenticated metadata
 requests that npm uses during version resolution.
 
@@ -139,7 +139,7 @@ with a notification target (e.g., Telegram).
    ```
 2. Restart OpenCode. The plugin requests a single-use pairing code from the relay and writes it to the OpenCode process log.
 3. Send the pairing code to the Telegram bot (`/pair <code>`).
-4. The relay confirms the pairing, sends a client token through the TLS WebSocket, and the plugin persists it in its `0600` configuration file. Notifications then begin flowing.
+4. The relay verifies the Telegram user and only then sends a client token through the TLS WebSocket. The plugin persists it in its `0600` configuration file and notifications begin flowing.
 
 ### Pairing troubleshooting
 
@@ -183,7 +183,7 @@ npm cache clean --force
 rm -rf ~/.npm/_cacache
 
 # Retry
-npm install @nomli/opencode-notify@0.0.0
+npm install @nomli/opencode-notify@<published-version>
 ```
 
 ### Plugin load cache
@@ -209,6 +209,50 @@ state appears stale:
 ---
 
 ## Deploying the relay server
+
+### Published GHCR image
+
+The release workflow publishes the relay server image to
+`ghcr.io/mysticalheat/opencode-notify-server`. It does not publish a mutable
+`latest` tag. Each GitHub release creates these immutable tags:
+
+- `release-<release-tag>`, for example `release-v0.0.1`.
+- `sha-<full-commit-sha>`, for pinning to the exact source commit.
+
+Use a GitHub token with the `read:packages` scope when the image is private:
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_USER" --password-stdin
+```
+
+#### Deploy an exact image
+
+Run these commands from a checkout containing `deploy/compose.example.yml`:
+
+```bash
+export RELAY_IMAGE_TAG=release-v0.0.1
+docker pull "ghcr.io/mysticalheat/opencode-notify-server:$RELAY_IMAGE_TAG"
+docker compose -f deploy/compose.example.yml up -d --no-build --force-recreate relay
+curl -fsS http://localhost:3000/health/ready
+```
+
+Keep the selected `RELAY_IMAGE_TAG` value in the deployment record.
+
+#### Roll back
+
+Select the previous release tag or a known-good full SHA tag, then repeat the
+same pull and restart procedure:
+
+```bash
+export RELAY_IMAGE_TAG=sha-<known-good-full-commit-sha>
+docker pull "ghcr.io/mysticalheat/opencode-notify-server:$RELAY_IMAGE_TAG"
+docker compose -f deploy/compose.example.yml up -d --no-build --force-recreate relay
+curl -fsS http://localhost:3000/health/ready
+```
+
+Review `docker compose -f deploy/compose.example.yml logs --tail=100 relay`
+after the restart. The Compose volume is preserved, so the SQLite database and
+pairings remain available during an image rollback.
 
 ### Container image
 
