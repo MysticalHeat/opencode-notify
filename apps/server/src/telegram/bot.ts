@@ -414,7 +414,7 @@ export function createBotAdapter(
           await next();
         });
       }
-      bot.catch((error) => onFatal?.(error));
+      bot.catch((error) => onFatal?.(new Error(`Telegram bot update failed: ${error.message}`)));
       await bot.init();
       void bot.start().catch((error) => onFatal?.(error));
     },
