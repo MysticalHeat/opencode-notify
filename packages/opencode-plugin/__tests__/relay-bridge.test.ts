@@ -121,6 +121,27 @@ describe("RelayBridge", () => {
 			expect(client.connect).toHaveBeenCalledOnce()
 		})
 
+		it("creates RelayClient with a pairing code when no token exists", () => {
+			const { client } = factoryWithState()
+			const factory = vi.fn(() => client)
+
+			const bridge = new RelayBridge({
+				config: relayConfig({ clientToken: undefined }),
+				opencodeClient: fakeOpencodeClient(),
+				clientId: "client-001",
+				sessionId: "session-abc",
+				pairingCode: "ABCD-1234",
+				relayClientFactory: factory,
+			})
+			bridge.start()
+
+			expect(factory).toHaveBeenCalledWith(expect.objectContaining({
+				clientToken: undefined,
+				pairingCode: "ABCD-1234",
+			}))
+			expect(client.connect).toHaveBeenCalledOnce()
+		})
+
 		it("passes relay config to factory", () => {
 			const { client } = factoryWithState()
 			const factory = vi.fn(() => client)
@@ -159,6 +180,29 @@ describe("RelayBridge", () => {
 			bridge.stop()
 
 			expect(client.shutdown).toHaveBeenCalledOnce()
+		})
+
+		it("reconnects with a replacement pairing code", () => {
+			const first = fakeRelayClient()
+			const replacement = fakeRelayClient()
+			const factory = vi.fn()
+				.mockReturnValueOnce(first)
+				.mockReturnValueOnce(replacement)
+			const bridge = new RelayBridge({
+				config: relayConfig({ clientToken: undefined }),
+				opencodeClient: fakeOpencodeClient(),
+				clientId: "client-001",
+				sessionId: "session-abc",
+				pairingCode: "ABCD-1234",
+				relayClientFactory: factory,
+			})
+
+			bridge.start()
+			bridge.replacePairingCode("WXYZ-9876")
+
+			expect(first.shutdown).toHaveBeenCalledOnce()
+			expect(factory).toHaveBeenLastCalledWith(expect.objectContaining({ pairingCode: "WXYZ-9876" }))
+			expect(replacement.connect).toHaveBeenCalledOnce()
 		})
 
 		it("stop is safe when relay was never started", () => {

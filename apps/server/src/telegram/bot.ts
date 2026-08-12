@@ -33,6 +33,7 @@ const MSG_PAIR_SUCCESS = "Pairing confirmed! Your client has been registered.";
 const MSG_PAIR_EXPIRED = "This pairing code has expired. Please generate a new one.";
 const MSG_PAIR_CONSUMED = "This pairing code has already been used.";
 const MSG_PAIR_INVALID = "Invalid pairing code. Please check and try again.";
+const MSG_PAIR_CONNECTING = "OpenCode is still connecting. Please wait a moment and send the same command again.";
 const MSG_PAIR_RATE_LIMITED = "Too many pairing attempts. Please wait and try again.";
 const MSG_REVOKE_USAGE = "Usage: <code>/revoke &lt;client-id&gt;</code>";
 const MSG_REVOKE_SUCCESS = "Client revoked successfully.";
@@ -64,6 +65,7 @@ function createCommandHandler(pairingService: PairingService) {
     if (result.error?.includes("consumed")) return { text: MSG_PAIR_CONSUMED };
     if (result.error?.includes("rate limit")) return { text: MSG_PAIR_RATE_LIMITED };
     if (result.error?.includes("unauthorized")) return { text: MSG_UNAUTHORIZED };
+    if (result.error?.includes("not connected")) return { text: MSG_PAIR_CONNECTING };
     return { text: MSG_PAIR_INVALID };
   }
 

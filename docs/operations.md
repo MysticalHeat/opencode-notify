@@ -137,16 +137,17 @@ with a notification target (e.g., Telegram).
      }
    }
    ```
-2. Restart OpenCode. The plugin requests a single-use pairing code from the relay and writes it to the OpenCode process log.
-3. Send the pairing code to the Telegram bot (`/pair <code>`).
-4. The relay verifies the Telegram user and only then sends a client token through the TLS WebSocket. The plugin persists it in its `0600` configuration file and notifications begin flowing.
+2. Restart OpenCode. The plugin requests a single-use pairing code from the relay, writes it to the OpenCode process log, and displays a TUI notification with the command to send to Telegram. The notification repeats every 15 seconds while the code remains valid.
+3. Send the pairing code to the Telegram bot (`/pair <code>`). If the bot says OpenCode is still connecting, wait a moment and send the same command again.
+4. Codes expire after five minutes. The plugin automatically requests a replacement code and displays it without requiring an OpenCode restart.
+5. The relay verifies the Telegram user and only then sends a client token through the TLS WebSocket. The plugin persists it in its `0600` configuration file and notifications begin flowing.
 
 ### Pairing troubleshooting
 
 | Symptom | Likely cause | Resolution |
 |---------|-------------|------------|
 | "No pairing code shown" | Relay not enabled or unreachable | Verify `relay.enabled: true` and `relay.url` in config |
-| Pairing times out | Network or relay failure | Check relay server logs; re-issue pairing |
+| Pairing times out | Network or relay failure | Wait for the replacement pairing code displayed by OpenCode; check relay server logs if it does not appear |
 | "Already paired" error | Client ID already associated | Use revocation (see below) |
 
 ---

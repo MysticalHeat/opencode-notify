@@ -878,7 +878,18 @@ describe("bot adapter creation", () => {
 // ─── LEGACY BOT HANDLER ──────────────────────────────────
 
 describe("legacy bot handler", () => {
-  it("createBotHandler returns backward-compatible command handler", async () => {
+	it("asks the user to retry a pairing command while OpenCode connects", async () => {
+		const { code } = pairingService.generatePairingCode(60_000);
+		const handler = createBotHandler(pairingService);
+		const resp = await handler.handleMessage({
+			userId: AUTHORIZED_USER_ID,
+			chatId: CHAT_ID,
+			text: `/pair ${code}`,
+		});
+		expect(resp.text).toContain("still connecting");
+	});
+
+	it("createBotHandler returns backward-compatible command handler", async () => {
     const handler = createBotHandler(pairingService);
     expect(handler).toBeDefined();
     expect(typeof handler.handleMessage).toBe("function");

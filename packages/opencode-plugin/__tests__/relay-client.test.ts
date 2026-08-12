@@ -166,6 +166,21 @@ describe("RelayClient", () => {
 		await vi.waitFor(() => expect(onTokenIssued).toHaveBeenCalledWith("issued-token", "client-opencode-001"), { timeout: 200 })
 	})
 
+	it("reports a failed pairing attempt so a fresh code can be requested", async () => {
+		const onPairingFailure = vi.fn()
+		const client = createClient({ pairingCode: "ABCD-1234", onPairingFailure })
+		client.connect()
+		await vi.waitFor(() => expect(fakeWs).not.toBeNull(), { timeout: 200 })
+		fakeWs!.emit("message", JSON.stringify({
+			protocolVersion: 1,
+			messageId: "pairing-failed",
+			type: "error",
+			sentAt: new Date().toISOString(),
+			payload: { code: "PAIRING_FAILED", message: "pairing confirmation timed out" },
+		}))
+		expect(onPairingFailure).toHaveBeenCalledWith("PAIRING_FAILED")
+	})
+
 	it("calls onDecision when a decision message arrives", async () => {
 		const onDecision = vi.fn()
 		const client = createClient({ onDecision })

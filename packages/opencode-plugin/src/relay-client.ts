@@ -9,6 +9,7 @@ import {
 
 export type RelayDecisionCallback = (decision: DecisionMessage) => void
 export type RelayStatusCallback = (status: RelayStatus) => void
+export type PairingFailureCallback = (reason: string) => void
 
 export type RelayStatus =
 	| "disconnected"
@@ -20,12 +21,13 @@ export type RelayStatus =
 
 export interface RelayClientOptions {
 	url: string
-	clientToken: string
+	clientToken?: string
 	pairingCode?: string
 	clientId: string
 	sessionId: string
 	onDecision: RelayDecisionCallback
 	onStatusChange?: RelayStatusCallback
+	onPairingFailure?: PairingFailureCallback
 	onTokenIssued?: (token: string | undefined, clientId: string) => void | Promise<void>
 	heartbeatIntervalMs?: number
 	maxReconnectDelayMs?: number
@@ -59,12 +61,13 @@ export class RelayClient {
 	private closeListener: ((event: CloseEvent) => void) | null = null
 
 	readonly url: string
-	private clientToken: string
+	private clientToken: string | undefined
 	private pairingCode: string | undefined
 	private clientId: string
 	readonly sessionId: string
 	readonly onDecision: RelayDecisionCallback
 	readonly onStatusChange: RelayStatusCallback | undefined
+	readonly onPairingFailure: PairingFailureCallback | undefined
 	readonly onTokenIssued: ((token: string | undefined, clientId: string) => void | Promise<void>) | undefined
 	private readonly heartbeatIntervalMs: number
 	private readonly maxReconnectDelayMs: number
@@ -77,6 +80,7 @@ export class RelayClient {
 		this.sessionId = options.sessionId
 		this.onDecision = options.onDecision
 		this.onStatusChange = options.onStatusChange
+		this.onPairingFailure = options.onPairingFailure
 		this.onTokenIssued = options.onTokenIssued
 		this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_MS
 		this.maxReconnectDelayMs = options.maxReconnectDelayMs ?? DEFAULT_MAX_RECONNECT_MS
@@ -357,8 +361,12 @@ export class RelayClient {
 			}
 			case "error":
 				if (["AUTH_FAILED", "AUTH_TIMEOUT", "PAIRING_FAILED", "PAIRING_UNAVAILABLE"].includes(msg.payload.code)) {
+					const pairingAttempt = Boolean(this.pairingCode)
 					this.terminalAuthFailure = true
 					this.setStatus("disconnected")
+					if (pairingAttempt) {
+						try { this.onPairingFailure?.(msg.payload.code) } catch { /* callback exception must not escape handler */ }
+					}
 					try { this.ws?.close(4001, msg.payload.code) } catch { /* ignore */ }
 				}
 				break

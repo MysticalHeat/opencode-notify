@@ -77,7 +77,7 @@ export {
 export type { UpsertEvent, CancelEvent } from "./events.js"
 
 export { RelayClient } from "./relay-client.js"
-export type { RelayClientOptions, RelayStatus, RelayDecisionCallback, RelayStatusCallback } from "./relay-client.js"
+export type { RelayClientOptions, RelayStatus, RelayDecisionCallback, RelayStatusCallback, PairingFailureCallback } from "./relay-client.js"
 
 export {
 	applyQuestion,

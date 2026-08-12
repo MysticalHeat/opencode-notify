@@ -33,6 +33,7 @@ export interface RelayBridgeDeps {
 	clientId: string
 	sessionId: string
 	pairingCode?: string
+	onPairingFailure?: (reason: string) => void
 	onTokenIssued?: (token: string | undefined, clientId: string) => void | Promise<void>
 	relayClientFactory?: RelayClientFactory
 }
@@ -58,7 +59,8 @@ export class RelayBridge {
 	private clientId: string
 	private readonly sessionId: string
 	private readonly factory: RelayClientFactory
-	private readonly pairingCode: string | undefined
+	private pairingCode: string | undefined
+	private readonly onPairingFailure: ((reason: string) => void) | undefined
 	private readonly onTokenIssued: ((token: string | undefined, clientId: string) => void | Promise<void>) | undefined
 
 	constructor(deps: RelayBridgeDeps) {
@@ -67,14 +69,16 @@ export class RelayBridge {
 		this.clientId = deps.clientId
 		this.sessionId = deps.sessionId
 		this.pairingCode = deps.pairingCode
+		this.onPairingFailure = deps.onPairingFailure
 		this.onTokenIssued = deps.onTokenIssued
 		this.factory = deps.relayClientFactory ?? defaultRelayClientFactory
 	}
 
 	start(): void {
+		if (this.relayClient) return
 		const relay = this.config.relay
 		if (!relay?.enabled) return
-		if (!relay.url || !relay.clientToken) return
+		if (!relay.url || (!relay.clientToken && !this.pairingCode)) return
 
 		this.relayClient = this.factory({
 			url: relay.url,
@@ -82,6 +86,7 @@ export class RelayBridge {
 			clientId: this.clientId,
 			sessionId: this.sessionId,
 			pairingCode: this.pairingCode,
+			onPairingFailure: this.onPairingFailure,
 			onTokenIssued: async (token, clientId) => {
 				this.clientId = clientId
 				await this.onTokenIssued?.(token, clientId)
@@ -97,6 +102,12 @@ export class RelayBridge {
 		if (!this.relayClient) return
 		this.relayClient.shutdown()
 		this.relayClient = null
+	}
+
+	replacePairingCode(pairingCode: string): void {
+		this.stop()
+		this.pairingCode = pairingCode
+		this.start()
 	}
 
 	handleEvent(event: { type?: string; properties?: unknown }): void {
