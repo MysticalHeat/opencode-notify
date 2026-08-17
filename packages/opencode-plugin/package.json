@@ -41,7 +41,7 @@
   },
   "devDependencies": {
     "@opencode-ai/plugin": "^1.17.18",
-    "@opencode-ai/sdk": "*",
+    "@opencode-ai/sdk": "^1.18.18",
     "@repo/protocol": "*",
     "tsup": "^8.5.0",
     "typescript": "^5.8.0",
