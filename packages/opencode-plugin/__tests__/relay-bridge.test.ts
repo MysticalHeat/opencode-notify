@@ -653,6 +653,7 @@ describe("plugin-level relay bridge integration", () => {
 	}
 
 	it("routes question.asked through relay bridge via plugin", async () => {
+		vi.useFakeTimers()
 		const bridge = makeFakeRealBridge()
 		bridge.start()
 
@@ -670,6 +671,7 @@ describe("plugin-level relay bridge integration", () => {
 			},
 		} as Parameters<PluginInput["event"]>[0])
 
+		await vi.advanceTimersByTimeAsync(10000)
 		await vi.waitFor(() => {
 			expect(bridge.relayClient.sendUpsert).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -677,9 +679,12 @@ describe("plugin-level relay bridge integration", () => {
 				}),
 			)
 		}, { timeout: 500 })
+		await instance.dispose?.()
+		vi.useRealTimers()
 	})
 
 	it("routes permission.asked through relay bridge via plugin", async () => {
+		vi.useFakeTimers()
 		const bridge = makeFakeRealBridge()
 		bridge.start()
 
@@ -698,6 +703,7 @@ describe("plugin-level relay bridge integration", () => {
 			},
 		} as Parameters<PluginInput["event"]>[0])
 
+		await vi.advanceTimersByTimeAsync(10000)
 		await vi.waitFor(() => {
 			expect(bridge.relayClient.sendUpsert).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -705,6 +711,8 @@ describe("plugin-level relay bridge integration", () => {
 				}),
 			)
 		}, { timeout: 500 })
+		await instance.dispose?.()
+		vi.useRealTimers()
 	})
 
 	it("does not block desktop notifications when relay is active", async () => {

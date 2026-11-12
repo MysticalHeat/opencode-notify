@@ -2,7 +2,8 @@ import { Bot, type Context } from "grammy";
 import type { InlineKeyboardMarkup } from "grammy/types";
 import type { PairingService } from "../pairing/service.js";
 import type { Repository, RequestRow } from "../db/repository.js";
-import { renderPermissionKeyboard, renderQuestionKeyboard, renderTerminalMessage, renderPermissionDecision, renderMultiSelectUpdateKeyboard } from "./render.js";
+import { renderTerminalMessage, renderPermissionDecision, renderMultiSelectUpdateKeyboard } from "./render.js";
+import { createNoticeService } from "./notices.js";
 import { handleCallbackQuery } from "./callbacks.js";
 import { handleTextReply } from "./text-replies.js";
 
@@ -183,6 +184,7 @@ export interface BotAdapter {
   webhookHandler(expectedToken: string): (req: { body?: unknown; headers: Record<string, string | undefined> }, res: { statusCode: number; end: (body?: string) => void }) => Promise<void>;
   /** Post a pending request to the bot as a Telegram message. */
   postRequest(requestRow: RequestRow): Promise<{ messageId: number } | undefined>;
+  cancelRequest(requestId: string): Promise<void>;
 }
 
 export function createBotAdapter(
@@ -192,6 +194,7 @@ export function createBotAdapter(
   pairingService: PairingService,
 ): BotAdapter {
   const bot = new Bot(botToken);
+  const notices = createNoticeService(repo, bot.api, authorizedUserId);
   const commandHandler = createCommandHandler(pairingService);
 
   bot.on("message:text", async (ctx: Context) => {
@@ -449,35 +452,8 @@ export function createBotAdapter(
       };
     },
 
-    async postRequest(requestRow: RequestRow): Promise<{ messageId: number } | undefined> {
-      if (!requestRow.payloadJson || !requestRow.payloadType) return undefined;
-
-      try {
-        const expiresAt = new Date(requestRow.expiresAt);
-        let resp: unknown;
-
-        if (requestRow.payloadType === "permission") {
-          const payload = JSON.parse(requestRow.payloadJson) as { action: string; patterns: string[]; display: string };
-          const { text, markup } = renderPermissionKeyboard(repo, requestRow.id, payload, expiresAt);
-          resp = await bot.api.sendMessage(authorizedUserId, text, {
-            parse_mode: "HTML",
-            reply_markup: markup,
-          });
-        } else {
-          const payload = JSON.parse(requestRow.payloadJson) as { text: string; options: Array<{ label: string; value: string }>; multiSelect?: boolean };
-          const { text, markup } = renderQuestionKeyboard(repo, requestRow.id, payload, expiresAt);
-          resp = await bot.api.sendMessage(authorizedUserId, text, {
-            parse_mode: "HTML",
-            reply_markup: markup,
-          });
-        }
-
-        const sendResp = resp as { message_id: number };
-        return { messageId: sendResp.message_id };
-      } catch {
-        return undefined;
-      }
-    },
+    postRequest: notices.postRequest,
+    cancelRequest: notices.cancelRequest,
   };
 }
 

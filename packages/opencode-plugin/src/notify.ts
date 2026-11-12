@@ -9,7 +9,8 @@ import type {
 	TerminalDetectDeps,
 } from "./types.js"
 import { canUseCmuxNotification, sendCmuxNotification, sendDesktopNotification, sendNotificationWithFallback } from "./backend.js"
-import { detectTerminalInfo, shouldSuppressForFocus } from "./focus.js"
+import { detectTerminalInfo } from "./focus.js"
+import { resolveNotificationDelays } from "./config.js"
 
 const DEDUPE_WINDOW_MS = 1500
 
@@ -38,7 +39,7 @@ function getSessionID(props: Record<string, unknown>): string {
 }
 
 function getRequestID(props: Record<string, unknown>): string | undefined {
-	return toText(props.requestID) ?? toText(props.requestId) ?? toText(props.id) ?? undefined
+	return toText(props.requestID) ?? toText(props.requestId) ?? toText(props.permissionID) ?? toText(props.permissionId) ?? toText(props.id) ?? undefined
 }
 
 function getCallID(props: Record<string, unknown>): string | undefined {
@@ -66,6 +67,7 @@ function mergeConfig(input: NotifyPluginConfig | undefined): NotifyPluginConfig 
 		notifyChildSessions: input?.notifyChildSessions ?? DEFAULT_CONFIG.notifyChildSessions,
 		sounds: { ...DEFAULT_CONFIG.sounds, ...input?.sounds },
 		quietHours: { ...DEFAULT_CONFIG.quietHours, ...input?.quietHours },
+		delays: resolveNotificationDelays(input?.delays),
 	}
 }
 
@@ -82,6 +84,8 @@ export function normalizeEventType(
 		if (toText(tool?.name) !== "question") return undefined
 		return "question.asked"
 	}
+	if ((event as { type?: string }).type === "question.v2.asked") return "question.asked"
+	if ((event as { type?: string }).type === "permission.v2.asked") return "permission.asked"
 
 	if (
 		eventType === "question.asked" ||
@@ -296,6 +300,7 @@ export function createNotifyPlugin(
 	deps?: NotifyDeps,
 ): Plugin {
 	const config = mergeConfig(configInput)
+	const delays = resolveNotificationDelays(config.delays)
 	const env = deps?.env ?? (typeof process !== "undefined" ? (process.env as Record<string, string | undefined>) : {})
 	const terminalDeps = defaultTerminalDeps(deps?.terminal)
 
@@ -305,22 +310,20 @@ export function createNotifyPlugin(
 		const relayBridge = deps?.relayBridge
 
 		relayBridge?.start?.()
+		const pending = new Map<string, { event: EventLike; timer: ReturnType<typeof setTimeout>; started: number; type: PluginEventType; sessionID: string }>()
+		const delivered = new Map<string, object>()
+		const aliases = new Map<string, string>()
+		let disposed = false
+		const clearPending = (key: string) => {
+			const item = pending.get(key)
+			if (item) clearTimeout(item.timer)
+			pending.delete(key)
+		}
 
-		async function handleEvent(event: EventLike): Promise<void> {
-			void relayBridge?.handleEvent(event as { type?: string; properties?: unknown })
-
-			const normalizedType = normalizeEventType(event)
-			if (!normalizedType) return
-
+		async function deliverDesktop(event: EventLike, normalizedType: PluginEventType, valid: () => boolean = () => true): Promise<void> {
 			if (config.quietHours?.enabled && inQuietHours({ start: config.quietHours.start ?? "22:00", end: config.quietHours.end ?? "08:00" })) return
-
-			if (shouldSuppressForFocus(normalizedType, terminalInfo)) return
-
 			const { skip, session } = await shouldSkipChildSession(normalizedType, event, config, input.client)
-			if (skip) return
-
-			const key = dedupeKey(normalizedType, event)
-			if (!tracker.shouldSend(key)) return
+			if (skip || disposed || !valid()) return
 
 			const info = summarizeEvent(normalizedType, event, config, session)
 
@@ -343,7 +346,82 @@ export function createNotifyPlugin(
 			})
 		}
 
+		function handleEvent(event: EventLike): void {
+			if (disposed) return
+			const props = getProps(event) ?? {}
+			const rawType = (event as { type?: string }).type ?? ""
+			const info = isRecord(props.info) ? props.info : undefined
+			const sessionID = info ? getSessionID(info) : getSessionID(props)
+			if ((rawType === "session.status" && isRecord(props.status) && props.status.type === "busy") ||
+				(rawType === "message.updated" && info?.role === "user")) {
+				clearPending(`idle:${sessionID}`)
+				delivered.delete(`idle:${sessionID}`)
+			}
+			const resolved = /^(question|permission)(?:\.v2)?\.(replied|rejected)$/.exec(rawType)
+			if (resolved) {
+				const requestID = getRequestID(props)
+				if (requestID) {
+					const alias = `${resolved[1]}:${sessionID}:${requestID}`
+					const key = aliases.get(alias) ?? alias
+					clearPending(key)
+					delivered.delete(key)
+					for (const [name, target] of aliases) if (target === key) aliases.delete(name)
+				}
+				relayBridge?.handleEvent(event)
+				return
+			}
+			const type = normalizeEventType(event)
+			if (!type) return
+			const requestKind = type === "question.asked" ? "question" : type === "permission.asked" || type === "permission.updated" ? "permission" : undefined
+			const requestID = getRequestID(props)
+			const callID = getCallID(props)
+			const names = requestKind ? [...new Set([requestID, callID].filter((id): id is string => !!id))].map(id => `${requestKind}:${sessionID}:${id}`) : []
+			const key = requestKind ? names.map(name => aliases.get(name)).find(Boolean) ?? names[0] ?? `${requestKind}:${sessionID}:unknown` : `${type === "session.idle" ? "idle" : "error"}:${sessionID}`
+			for (const name of names) aliases.set(name, key)
+			if (type === "session.error") {
+				if (tracker.shouldSend(key)) void deliverDesktop(event, type)
+				return
+			}
+			const existing = pending.get(key)
+			if (existing) {
+				// Keep the original deadline while allowing richer repeated request data.
+				existing.event = { ...existing.event, ...event, type: rawType === "permission.updated" ? existing.event.type : event.type, properties: { ...getProps(existing.event), ...props } } as EventLike
+				return
+			}
+			if (requestKind && delivered.has(key)) return
+			const started = Date.now()
+			const run = () => {
+				const item = pending.get(key)
+				if (!item || disposed) return
+				let active = false
+				try { active = deps?.presence?.isActive(item.sessionID) === true } catch { /* unknown */ }
+				if (!requestKind && active) {
+					pending.delete(key)
+					return
+				}
+				if (requestKind && active && Date.now() - item.started < delays.activeMaxMs) {
+					item.timer = setTimeout(run, Math.min(1000, delays.activeMaxMs - (Date.now() - item.started)))
+					return
+				}
+				pending.delete(key)
+				const delivery = {}
+				delivered.set(key, delivery)
+				relayBridge?.handleEvent(item.event)
+				void deliverDesktop(item.event, item.type, () => delivered.get(key) === delivery).finally(() => {
+					if (!requestKind && delivered.get(key) === delivery) delivered.delete(key)
+				})
+			}
+			const timer = setTimeout(run, requestKind ? delays.requestMs : delays.idleMs)
+			pending.set(key, { event, timer, started, type, sessionID })
+		}
+
 		return {
+			dispose: async () => {
+				disposed = true
+				for (const key of pending.keys()) clearPending(key)
+				delivered.clear()
+				aliases.clear()
+			},
 			event: async ({ event }) => {
 				await handleEvent(event as EventLike)
 			},

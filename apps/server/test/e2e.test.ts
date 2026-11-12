@@ -41,6 +41,8 @@ class FakeBotAdapter implements BotAdapter {
 
   async stop(): Promise<void> {}
 
+  async cancelRequest(): Promise<void> {}
+
   webhookHandler(_expectedToken: string) {
     return async (_req: unknown, _res: unknown) => {};
   }

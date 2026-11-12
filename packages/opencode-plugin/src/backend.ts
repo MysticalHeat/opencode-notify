@@ -1,5 +1,7 @@
 declare const Bun: { which: (cmd: string) => string | null; spawn: (cmd: string[], opts?: Record<string, unknown>) => { exited: Promise<number>; kill?: () => void } } | undefined
 
+import { execFile } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { TimeoutError, withTimeout } from "./timeout.js"
 import type {
 	CmuxNotificationPayload,
@@ -82,7 +84,33 @@ export async function sendCmuxNotification(
 
 // ─── DESKTOP ─────────────────────────────────────────────
 
-export function sendDesktopNotification(options: DesktopNotificationOptions): Promise<boolean> {
+async function isGnomeDesktop(): Promise<boolean> {
+	if (process.platform !== "linux") return false
+	if (/gnome/i.test(process.env.XDG_CURRENT_DESKTOP ?? "")) return true
+	// Services started before login do not inherit the graphical session environment.
+	return new Promise((resolve) => {
+		execFile("gdbus", [
+			"call", "--session", "--dest", "org.freedesktop.Notifications",
+			"--object-path", "/org/freedesktop/Notifications",
+			"--method", "org.freedesktop.Notifications.GetServerInformation",
+		], { timeout: 1500 }, (error, stdout) => resolve(!error && /gnome-shell/i.test(stdout)))
+	})
+}
+
+export async function sendDesktopNotification(options: DesktopNotificationOptions): Promise<boolean> {
+	if (await isGnomeDesktop()) {
+		// GTK notifications survive the sending process exiting, unlike FDO app sources.
+		const sent = await new Promise<boolean>((resolve) => {
+			execFile("gdbus", [
+				"call", "--session", "--dest", "org.gtk.Notifications",
+				"--object-path", "/org/gtk/Notifications",
+				"--method", "org.gtk.Notifications.AddNotification",
+				"com.opencode.CLI", randomUUID(),
+				`{"title": <${JSON.stringify(options.title)}>, "body": <${JSON.stringify(options.body)}>}`,
+			], { timeout: 5000 }, (error) => resolve(!error))
+		})
+		if (sent) return true
+	}
 	return new Promise((resolve) => {
 		loadNodeNotifier().then((notifier) => {
 			if (!notifier) {

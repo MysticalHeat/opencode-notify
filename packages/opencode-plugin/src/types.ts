@@ -26,10 +26,17 @@ export interface QuietHoursConfig {
 	end?: string
 }
 
+export interface NotificationDelayConfig {
+	idleMs?: number
+	requestMs?: number
+	activeMaxMs?: number
+}
+
 export interface NotifyPluginConfig {
 	notifyChildSessions?: boolean
 	sounds?: NotifySoundConfig
 	quietHours?: QuietHoursConfig
+	delays?: NotificationDelayConfig
 }
 
 export interface CmuxNotificationPayload {
@@ -78,6 +85,8 @@ export interface NotifyDeps {
 	env?: EnvironmentVariables
 	terminal?: TerminalDetectDeps
 	relayBridge?: IRelayBridge
+	/** Return true only for confirmed active presence; false/undefined means absent or unknown. */
+	presence?: { isActive(sessionId: string): boolean | undefined }
 }
 
 export type EventLike = Event & { type?: string; properties?: unknown }

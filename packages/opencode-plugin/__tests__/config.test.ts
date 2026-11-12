@@ -88,6 +88,18 @@ function jsonEntry(data: unknown, mode = 0o600): MemEntry {
 // ── loadConfig ────────────────────────────────────────────
 
 describe("loadConfig", () => {
+	it("merges and validates configurable delay settings", async () => {
+		const os = createMockOs()
+		const memfs = createMemFs({ [CONFIG_PATH]: jsonEntry({ desktop: { delays: { requestMs: 12000 } } }) })
+		expect((await loadConfig({ fs: memfs, os })).desktop?.delays).toEqual({ idleMs: 7000, requestMs: 12000, activeMaxMs: 30000 })
+		for (const delays of [{ idleMs: -1 }, { requestMs: "1" }, { activeMaxMs: 10 }, { requestMs: 30001 }, { idleMs: 0.5 }, { idleMs: 2147483648 }, null]) {
+			const invalid = createMemFs({ [CONFIG_PATH]: jsonEntry({ desktop: { delays } }) })
+			await expect(loadConfig({ fs: invalid, os })).rejects.toThrow(ValidationError)
+		}
+		await writeConfig({ desktop: { delays: { idleMs: 0, requestMs: 0, activeMaxMs: 0 } } }, { fs: memfs, os })
+		expect((await loadConfig({ fs: memfs, os })).desktop?.delays).toEqual({ idleMs: 0, requestMs: 0, activeMaxMs: 0 })
+		await expect(writeConfig({ desktop: { delays: { requestMs: 4, activeMaxMs: 3 } } }, { fs: memfs, os })).rejects.toThrow(ValidationError)
+	})
 	describe("defaults", () => {
 		it("returns DEFAULT_CONFIG when no config file exists", async () => {
 			const memfs = createMemFs()

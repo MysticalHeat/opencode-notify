@@ -13,6 +13,7 @@ const MIGRATIONS = [
   { version: 4, file: "004-outbox-expiry.sql" },
   { version: 5, file: "005-callback-ids.sql" },
   { version: 6, file: "006-pairing-confirmation.sql" },
+  { version: 7, file: "007-telegram-notices.sql" },
 ] as const;
 
 export const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)!.version;
@@ -114,6 +115,7 @@ const SCHEMA_REQUIREMENTS = [
     ],
   },
   { version: 6, tables: ["pairing_codes.confirmed_at", "pairing_codes.confirmed_by_user_id"] },
+  { version: 7, tables: ["requests.telegram_send_state", "requests.telegram_message_id"] },
 ] as const;
 
 function findMigrationsDir(): string {

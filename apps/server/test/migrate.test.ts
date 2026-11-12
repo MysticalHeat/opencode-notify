@@ -15,6 +15,7 @@ const migrationFiles = [
   "003-soft-revoke.sql",
   "004-outbox-expiry.sql",
   "005-callback-ids.sql",
+  "006-pairing-confirmation.sql",
 ] as const;
 
 function databasePath(): string {
@@ -67,6 +68,16 @@ describe("runMigrations", () => {
 
     runMigrations(db);
 
+    expect(db.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("upgrades a recorded version 6 database with existing requests", () => {
+    const db = openDatabase();
+    applyLegacyMigrations(db, 6);
+    db.pragma("user_version = 6");
+    db.exec("INSERT INTO clients (id, token_hash) VALUES ('c', 'hash'); INSERT INTO requests (id, request_id, client_id, session_id, status, expires_at) VALUES ('r', 'request', 'c', 's', 'pending', '2099-01-01')");
+    runMigrations(db);
+    expect(db.prepare("SELECT telegram_send_state, telegram_message_id FROM requests WHERE id = 'r'").get()).toEqual({ telegram_send_state: null, telegram_message_id: null });
     expect(db.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
   });
 

@@ -239,7 +239,7 @@ export function createGatewayHandler(options: GatewayOptions) {
             payload: { clientId: id, sessionId },
           }));
 
-          if (botAdapter) {
+          if (botAdapter && row.status === "pending") {
             botAdapter.postRequest(row).catch(() => {});
           }
           break;
@@ -252,8 +252,11 @@ export function createGatewayHandler(options: GatewayOptions) {
           const sessionId = payload.sessionId;
 
           const req = repo.findRequest(requestId, id, sessionId);
-          if (req && req.status === "pending") {
-            repo.updateRequestStatus(req.id, "cancelled");
+          if (req) {
+            repo.cancelPendingRequest(req.id);
+            if (repo.findRequestById(req.id)?.status === "cancelled") {
+              botAdapter?.cancelRequest(req.id).catch(() => {});
+            }
           }
 
           connection.send(JSON.stringify({

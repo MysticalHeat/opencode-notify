@@ -9,6 +9,14 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./presence": {
+      "types": "./dist/presence.d.ts",
+      "import": "./dist/presence.js"
+    },
+    "./tui": {
+      "types": "./dist/tui.d.ts",
+      "import": "./dist/tui.js"
     }
   },
   "files": [

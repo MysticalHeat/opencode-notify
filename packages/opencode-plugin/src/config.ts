@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { promises as fs } from "node:fs"
 import { homedir } from "node:os"
 import { resolve, dirname } from "node:path"
-import type { NotifySoundConfig, QuietHoursConfig } from "./types.js"
+import type { NotificationDelayConfig, NotifySoundConfig, QuietHoursConfig } from "./types.js"
 
 export interface RelayConfig {
 	url?: string
@@ -22,6 +22,7 @@ export interface OpenCodeNotifyConfig {
 		sounds?: NotifySoundConfig
 		quietHours?: QuietHoursConfig
 		notifyChildSessions?: boolean
+		delays?: NotificationDelayConfig
 	}
 	version?: number
 }
@@ -95,6 +96,12 @@ const DEFAULT_QUIET_HOURS: QuietHoursConfig = {
 	end: "08:00",
 }
 
+export const DEFAULT_DELAYS: Required<NotificationDelayConfig> = {
+	idleMs: 7000,
+	requestMs: 10000,
+	activeMaxMs: 30000,
+}
+
 export const DEFAULT_CONFIG: OpenCodeNotifyConfig = {
 	relay: {
 		enabled: false,
@@ -107,6 +114,7 @@ export const DEFAULT_CONFIG: OpenCodeNotifyConfig = {
 	desktop: {
 		sounds: { ...DEFAULT_SOUNDS },
 		quietHours: { ...DEFAULT_QUIET_HOURS },
+		delays: { ...DEFAULT_DELAYS },
 		notifyChildSessions: false,
 	},
 	version: 1,
@@ -141,6 +149,24 @@ function isValidTimeFormat(time: string): boolean {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
 	return !!v && typeof v === "object" && !Array.isArray(v)
+}
+
+export function resolveNotificationDelays(input: unknown): Required<NotificationDelayConfig> {
+	if (input !== undefined && !isRecord(input)) throw new ValidationError("desktop.delays must be an object")
+	const values = { ...DEFAULT_DELAYS }
+	if (isRecord(input)) {
+		for (const key of ["idleMs", "requestMs", "activeMaxMs"] as const) {
+			if (input[key] !== undefined) (values as Record<string, unknown>)[key] = input[key]
+		}
+	}
+	for (const key of ["idleMs", "requestMs", "activeMaxMs"] as const) {
+		const value = values[key]
+		if (!Number.isInteger(value) || value < 0 || value > 2147483647) {
+			throw new ValidationError(`desktop.delays.${key} must be an integer between 0 and 2147483647`)
+		}
+	}
+	if (values.activeMaxMs < values.requestMs) throw new ValidationError("desktop.delays.activeMaxMs must be at least requestMs")
+	return values
 }
 
 function validateConfig(input: unknown, label: string): OpenCodeNotifyConfig {
@@ -207,6 +233,7 @@ function validateConfig(input: unknown, label: string): OpenCodeNotifyConfig {
 			errors.push("desktop must be an object")
 		} else {
 			const d = cfg.desktop as Record<string, unknown>
+			resolveNotificationDelays(d.delays)
 			if (d.notifyChildSessions !== undefined && typeof d.notifyChildSessions !== "boolean") {
 				errors.push("desktop.notifyChildSessions must be a boolean")
 			}

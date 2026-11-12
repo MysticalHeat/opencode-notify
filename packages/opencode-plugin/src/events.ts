@@ -23,7 +23,7 @@ function getSessionID(props: Record<string, unknown>): string {
 }
 
 function getRequestID(props: Record<string, unknown>): string | undefined {
-	return toText(props.requestID) ?? toText(props.requestId) ?? toText(props.id) ?? undefined
+	return toText(props.requestID) ?? toText(props.requestId) ?? toText(props.permissionID) ?? toText(props.permissionId) ?? toText(props.id) ?? undefined
 }
 
 export interface UpsertEvent {
@@ -47,6 +47,15 @@ export interface CancelEvent {
 	readonly requestId: string
 	readonly clientId: string
 	readonly sessionId: string
+}
+
+export function eventToCancel(event: { type?: string; properties?: unknown }, clientId: string): CancelEvent | null {
+	if (!event.type || !["question.replied", "question.rejected", "question.v2.replied", "question.v2.rejected", "permission.replied", "permission.v2.replied"].includes(event.type)) return null
+	const props = getProps(event)
+	if (!props) return null
+	const requestId = getRequestID(props)
+	if (!requestId) return null
+	return { requestId, clientId, sessionId: getSessionID(props) }
 }
 
 function extractQuestion(props: Record<string, unknown>): UpsertEvent["question"] | undefined {

@@ -4,6 +4,8 @@ import { ensureConfigMode, loadConfig, writeConfig, type OpenCodeNotifyConfig } 
 import { createNotifyPlugin } from "./notify.js"
 import { RelayBridge } from "./relay-bridge.js"
 import type { OpencodeClient } from "./opencode-client.js"
+import type { NotifyDeps } from "./types.js"
+import { PresenceBroker, registerPresence } from "./presence.js"
 
 interface PairingCode {
 	code: string
@@ -36,11 +38,35 @@ async function requestPairingCode(relayUrl: string): Promise<PairingCode> {
 	return { code: body.code, expiresAt }
 }
 
-export const OpenCodeNotifyPlugin: Plugin = async (input: PluginInput) => {
+/** Create a runtime with an optional externally maintained session-presence source. */
+export function createOpenCodeNotifyPlugin(deps: Pick<NotifyDeps, "presence"> = {}): Plugin {
+return async (input: PluginInput) => {
 	const config = await loadConfig()
 	await ensureConfigMode()
+	let broker: PresenceBroker | undefined
+	let registration: Awaited<ReturnType<typeof registerPresence>>
+	if (!deps.presence && input.serverUrl && input.directory) {
+		try {
+			broker = await PresenceBroker.start()
+			registration = await registerPresence(broker, input.serverUrl, input.directory)
+			if (!registration) { await broker.close(); broker = undefined }
+		} catch {
+			await broker?.close().catch(() => {})
+			broker = undefined
+		}
+	}
+	const presenceDeps = { ...deps, presence: deps.presence ?? registration }
+	const closePresence = async () => {
+		try { await registration?.close() } catch { /* best effort */ }
+		try { await broker?.close() } catch { /* best effort */ }
+	}
+	const withPresence = (hooks: Awaited<ReturnType<Plugin>>) => ({
+		...hooks,
+		dispose: async () => { try { await hooks.dispose?.() } finally { await closePresence() } },
+	})
+	try {
 	const relay = config.relay
-	if (!relay?.enabled || !relay.url) return createNotifyPlugin(config.desktop)(input)
+	if (!relay?.enabled || !relay.url) return withPresence(await createNotifyPlugin(config.desktop, presenceDeps)(input))
 	const relayUrl = relay.url
 
 	let clientId = relay.clientId ?? randomUUID()
@@ -49,7 +75,7 @@ export const OpenCodeNotifyPlugin: Plugin = async (input: PluginInput) => {
 		pairing = relay.clientToken ? undefined : await requestPairingCode(relayUrl)
 	} catch (error) {
 		console.warn(`OpenCode Notify relay unavailable; using desktop notifications: ${error instanceof Error ? error.message : String(error)}`)
-		return createNotifyPlugin(config.desktop)(input)
+		return withPresence(await createNotifyPlugin(config.desktop, presenceDeps)(input))
 	}
 	if (pairing) console.info(`OpenCode Notify pairing code: ${pairing.code}. Send /pair ${pairing.code} to Telegram.`)
 
@@ -144,8 +170,10 @@ export const OpenCodeNotifyPlugin: Plugin = async (input: PluginInput) => {
 
 	bridge.start()
 	schedulePairingReminders()
-	const hooks = await createNotifyPlugin(config.desktop, { relayBridge: bridge })(input)
-	return {
+	let hooks: Awaited<ReturnType<Plugin>>
+	try { hooks = await createNotifyPlugin(config.desktop, { ...presenceDeps, relayBridge: bridge })(input) }
+	catch (error) { disposed = true; clearPairingTimers(); bridge.stop(); throw error }
+	return withPresence({
 		...hooks,
 		dispose: async () => {
 			disposed = true
@@ -153,7 +181,11 @@ export const OpenCodeNotifyPlugin: Plugin = async (input: PluginInput) => {
 			bridge.stop()
 			await hooks.dispose?.()
 		},
-	}
+	})
+	} catch (error) { await closePresence(); throw error }
 }
+}
+
+export const OpenCodeNotifyPlugin: Plugin = createOpenCodeNotifyPlugin()
 
 export default { id: "@nomli/opencode-notify", server: OpenCodeNotifyPlugin }

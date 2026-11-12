@@ -1,7 +1,7 @@
 import type { DecisionMessage } from "@repo/protocol"
 import type { OpenCodeNotifyConfig } from "./config.js"
 import type { UpsertEvent, CancelEvent } from "./events.js"
-import { eventToUpsert } from "./events.js"
+import { eventToCancel, eventToUpsert } from "./events.js"
 import type { RelayClientOptions } from "./relay-client.js"
 import { RelayClient } from "./relay-client.js"
 import type { OpencodeClient } from "./opencode-client.js"
@@ -112,6 +112,11 @@ export class RelayBridge {
 
 	handleEvent(event: { type?: string; properties?: unknown }): void {
 		if (!this.relayClient) return
+		const cancel = eventToCancel(event, this.clientId)
+		if (cancel) {
+			this.relayClient.sendCancel(cancel)
+			return
+		}
 		const upsert = eventToUpsert(event, this.clientId)
 		if (upsert) {
 			this.relayClient.sendUpsert(upsert)

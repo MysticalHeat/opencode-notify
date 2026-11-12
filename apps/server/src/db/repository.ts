@@ -145,6 +145,11 @@ export interface Repository {
   findRequestById(id: string): RequestRow | undefined;
   updateRequestStatus(id: string, status: RequestStatus): RequestRow;
   expireRequests(): number;
+  claimTelegramNotice(id: string): boolean;
+  releaseTelegramNotice(id: string): void;
+  saveTelegramNotice(id: string, messageId: number): void;
+  findTelegramNotice(id: string): number | undefined;
+  cancelPendingRequest(id: string): boolean;
 
   // request_answers
   saveAnswers(
@@ -419,9 +424,9 @@ export function createRepository(db: Database.Database): Repository {
     INSERT INTO requests (id, request_id, client_id, session_id, status, expires_at, payload_type, payload_json, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     ON CONFLICT(request_id, client_id, session_id) DO UPDATE SET
-      expires_at = excluded.expires_at,
-      payload_type = excluded.payload_type,
-      payload_json = excluded.payload_json,
+      expires_at = CASE WHEN requests.status = 'pending' AND requests.telegram_send_state IS NULL THEN excluded.expires_at ELSE requests.expires_at END,
+      payload_type = CASE WHEN requests.status = 'pending' AND requests.telegram_send_state IS NULL THEN excluded.payload_type ELSE requests.payload_type END,
+      payload_json = CASE WHEN requests.status = 'pending' AND requests.telegram_send_state IS NULL THEN excluded.payload_json ELSE requests.payload_json END,
       updated_at = datetime('now')
     RETURNING *
   `);
@@ -725,6 +730,29 @@ export function createRepository(db: Database.Database): Repository {
     findRequestById(id: string): RequestRow | undefined {
       const row = db.prepare("SELECT * FROM requests WHERE id = ?").get(id) as Record<string, unknown> | undefined;
       return row ? mapRequest(row) : undefined;
+    },
+
+    claimTelegramNotice(id: string): boolean {
+      return db.prepare(`UPDATE requests SET telegram_send_state = 'sending'
+        WHERE id = ? AND status = 'pending' AND telegram_send_state IS NULL
+        AND julianday(expires_at) > julianday('now')`).run(id).changes === 1;
+    },
+
+    releaseTelegramNotice(id: string): void {
+      db.prepare("UPDATE requests SET telegram_send_state = NULL WHERE id = ? AND telegram_send_state = 'sending'").run(id);
+    },
+
+    saveTelegramNotice(id: string, messageId: number): void {
+      db.prepare("UPDATE requests SET telegram_send_state = 'sent', telegram_message_id = ? WHERE id = ? AND telegram_send_state = 'sending'").run(messageId, id);
+    },
+
+    findTelegramNotice(id: string): number | undefined {
+      const row = db.prepare("SELECT telegram_message_id FROM requests WHERE id = ? AND telegram_send_state = 'sent'").get(id) as { telegram_message_id: number } | undefined;
+      return row?.telegram_message_id;
+    },
+
+    cancelPendingRequest(id: string): boolean {
+      return updateRequestStatusStmt.run('cancelled', id, 'pending').changes === 1;
     },
 
     updateRequestStatus(id: string, status: RequestStatus): RequestRow {

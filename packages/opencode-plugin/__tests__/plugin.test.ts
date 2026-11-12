@@ -34,6 +34,7 @@ describe("createNotifyPlugin — session metadata single-fetch", () => {
 	})
 
 	it("calls client.session.get exactly once for session.idle event", async () => {
+		vi.useFakeTimers()
 		const sessionGet = vi.fn().mockResolvedValue({
 			data: { title: "My Session", parentID: undefined },
 		})
@@ -44,8 +45,11 @@ describe("createNotifyPlugin — session metadata single-fetch", () => {
 		const plugin = createNotifyPlugin()
 		const instance = await plugin(buildInput({ client }))
 		await instance.event(idleEvent("s1"))
+		await vi.advanceTimersByTimeAsync(7000)
 
 		expect(sessionGet).toHaveBeenCalledTimes(1)
+		await instance.dispose?.()
+		vi.useRealTimers()
 	})
 })
 
@@ -124,7 +128,8 @@ describe("createNotifyPlugin — tool.execute.before", () => {
 })
 
 describe("createNotifyPlugin — focus suppression with deps", () => {
-	it("suppresses session.idle when terminal is focused on mac", async () => {
+	it("does not infer session presence from a focused terminal", async () => {
+		vi.useFakeTimers()
 		const sessionGet = vi.fn().mockResolvedValue({
 			data: { title: "Session", parentID: undefined },
 		})
@@ -146,8 +151,11 @@ describe("createNotifyPlugin — focus suppression with deps", () => {
 
 		const instance = await plugin(buildInput({ client }))
 		await instance.event(idleEvent("s1"))
+		await vi.advanceTimersByTimeAsync(7000)
 
-		expect(sessionGet).not.toHaveBeenCalled()
+		expect(sessionGet).toHaveBeenCalledTimes(1)
+		await instance.dispose?.()
+		vi.useRealTimers()
 	})
 
 	it("does NOT suppress question.asked when terminal is focused", async () => {
@@ -175,6 +183,7 @@ describe("createNotifyPlugin — focus suppression with deps", () => {
 	})
 
 	it("does NOT suppress session.idle when terminal is NOT focused (linux)", async () => {
+		vi.useFakeTimers()
 		const sessionGet = vi.fn().mockResolvedValue({
 			data: { title: "Session", parentID: undefined },
 		})
@@ -192,7 +201,10 @@ describe("createNotifyPlugin — focus suppression with deps", () => {
 
 		const instance = await plugin(buildInput({ client }))
 		await instance.event(idleEvent("s1"))
+		await vi.advanceTimersByTimeAsync(7000)
 
 		expect(sessionGet).toHaveBeenCalledTimes(1)
+		await instance.dispose?.()
+		vi.useRealTimers()
 	})
 })
